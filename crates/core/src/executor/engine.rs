@@ -290,6 +290,29 @@ impl Engine {
                 self.exec_delete(db, input_result, variables, txn_id)
             }
 
+            PhysicalPlan::OrderBy { input, items } => {
+                let input_result = self.execute_operator(input, db, txn_id)?;
+                self.exec_order_by(input_result, items)
+            }
+
+            PhysicalPlan::Limit { input, count } => {
+                let input_result = self.execute_operator(input, db, txn_id)?;
+                self.exec_limit(input_result, count)
+            }
+
+            PhysicalPlan::Skip { input, count } => {
+                let input_result = self.execute_operator(input, db, txn_id)?;
+                self.exec_skip(input_result, count)
+            }
+
+            PhysicalPlan::Aggregate {
+                input,
+                expressions,
+            } => {
+                let input_result = self.execute_operator(input, db, txn_id)?;
+                self.exec_aggregate(input_result, expressions)
+            }
+
             // DDL handled in execute_plan
             PhysicalPlan::CreateNodeTable { .. }
             | PhysicalPlan::CreateRelTable { .. }
@@ -741,6 +764,211 @@ impl Engine {
         Ok(Intermediate::empty())
     }
 
+    // ── OrderBy (Task 041) ─────────────────────────────────────
+
+    fn exec_order_by(
+        &self,
+        input: Intermediate,
+        items: &[OrderByItem],
+    ) -> Result<Intermediate, GqliteError> {
+        let mut rows = input.rows;
+        let columns = &input.columns;
+
+        rows.sort_by(|a, b| {
+            for item in items {
+                let va = self.eval_expr(&item.expr, columns, a).unwrap_or(Value::Null);
+                let vb = self.eval_expr(&item.expr, columns, b).unwrap_or(Value::Null);
+
+                let ord = compare_values(&va, &vb).unwrap_or(Ordering::Equal);
+                let ord = if item.descending { ord.reverse() } else { ord };
+                if ord != Ordering::Equal {
+                    return ord;
+                }
+            }
+            Ordering::Equal
+        });
+
+        Ok(Intermediate {
+            columns: input.columns,
+            types: input.types,
+            rows,
+        })
+    }
+
+    // ── Limit (Task 041) ───────────────────────────────────────
+
+    fn exec_limit(
+        &self,
+        input: Intermediate,
+        count: &Expr,
+    ) -> Result<Intermediate, GqliteError> {
+        let n = match eval_literal(count)? {
+            Value::Int(i) => i.max(0) as usize,
+            _ => {
+                return Err(GqliteError::Execution(
+                    "LIMIT requires an integer".into(),
+                ))
+            }
+        };
+
+        let rows = input.rows.into_iter().take(n).collect();
+        Ok(Intermediate {
+            columns: input.columns,
+            types: input.types,
+            rows,
+        })
+    }
+
+    // ── Skip (Task 041) ────────────────────────────────────────
+
+    fn exec_skip(
+        &self,
+        input: Intermediate,
+        count: &Expr,
+    ) -> Result<Intermediate, GqliteError> {
+        let n = match eval_literal(count)? {
+            Value::Int(i) => i.max(0) as usize,
+            _ => {
+                return Err(GqliteError::Execution(
+                    "SKIP requires an integer".into(),
+                ))
+            }
+        };
+
+        let rows = input.rows.into_iter().skip(n).collect();
+        Ok(Intermediate {
+            columns: input.columns,
+            types: input.types,
+            rows,
+        })
+    }
+
+    // ── Aggregate (Task 040) ───────────────────────────────────
+
+    fn exec_aggregate(
+        &self,
+        input: Intermediate,
+        expressions: &[(Expr, Option<String>)],
+    ) -> Result<Intermediate, GqliteError> {
+        use std::collections::HashMap;
+
+        // Separate group-by expressions from aggregate function calls
+        let mut group_indices: Vec<usize> = Vec::new();
+        let mut agg_indices: Vec<usize> = Vec::new();
+
+        for (i, (expr, _)) in expressions.iter().enumerate() {
+            if is_aggregate_call(expr) {
+                agg_indices.push(i);
+            } else {
+                group_indices.push(i);
+            }
+        }
+
+        // Group rows by key values
+        let mut groups: HashMap<Vec<Value>, Vec<Vec<Value>>> = HashMap::new();
+        for row in &input.rows {
+            let key: Vec<Value> = group_indices
+                .iter()
+                .map(|&i| self.eval_expr(&expressions[i].0, &input.columns, row))
+                .collect::<Result<Vec<_>, _>>()?;
+            groups.entry(key).or_default().push(row.clone());
+        }
+
+        // If no groups and no group keys, return one row with aggregate defaults
+        if groups.is_empty() && group_indices.is_empty() {
+            groups.insert(Vec::new(), Vec::new());
+        }
+
+        // Build output column names and types
+        let mut col_names = Vec::new();
+        let mut col_types = Vec::new();
+        for (expr, alias) in expressions {
+            col_names.push(alias.clone().unwrap_or_else(|| expr_display_name(expr)));
+            col_types.push(DataType::String); // placeholder, inferred below
+        }
+
+        let mut out_rows = Vec::new();
+        for (key, group_rows) in &groups {
+            let mut out_row = Vec::new();
+            let mut group_key_idx = 0;
+
+            for (i, (expr, _)) in expressions.iter().enumerate() {
+                if group_indices.contains(&i) {
+                    out_row.push(key[group_key_idx].clone());
+                    group_key_idx += 1;
+                } else {
+                    let val =
+                        self.eval_aggregate(expr, &input.columns, group_rows)?;
+                    out_row.push(val);
+                }
+            }
+            out_rows.push(out_row);
+        }
+
+        // Infer types from first result row
+        if let Some(first) = out_rows.first() {
+            for (i, val) in first.iter().enumerate() {
+                if i < col_types.len() {
+                    if let Some(dt) = val.data_type() {
+                        col_types[i] = dt;
+                    }
+                }
+            }
+        }
+
+        Ok(Intermediate {
+            columns: col_names,
+            types: col_types,
+            rows: out_rows,
+        })
+    }
+
+    fn eval_aggregate(
+        &self,
+        expr: &Expr,
+        columns: &[String],
+        rows: &[Vec<Value>],
+    ) -> Result<Value, GqliteError> {
+        match expr {
+            Expr::FunctionCall { name, args, .. } => {
+                let func_name = name.to_lowercase();
+                let is_count_star = func_name == "count"
+                    && (args.is_empty()
+                        || matches!(args.first(), Some(Expr::Star)));
+
+                let mut accumulator = if is_count_star {
+                    Box::new(
+                        crate::functions::aggregate::CountAccumulator::new_star(),
+                    ) as Box<dyn crate::functions::registry::AggregateAccumulator>
+                } else {
+                    crate::functions::registry::create_accumulator(&func_name)
+                        .ok_or_else(|| {
+                            GqliteError::Execution(format!(
+                                "unknown aggregate '{}'",
+                                name
+                            ))
+                        })?
+                };
+
+                for row in rows {
+                    let val = if is_count_star {
+                        Value::Int(1)
+                    } else if args.is_empty() {
+                        Value::Null
+                    } else {
+                        self.eval_expr(&args[0], columns, row)?
+                    };
+                    accumulator.accumulate(&val);
+                }
+
+                Ok(accumulator.finalize())
+            }
+            _ => Err(GqliteError::Execution(
+                "expected aggregate function call".into(),
+            )),
+        }
+    }
+
     // ── Expression evaluator ────────────────────────────────────
 
     fn eval_expr(
@@ -981,6 +1209,17 @@ fn compare_values(a: &Value, b: &Value) -> Option<Ordering> {
     }
 }
 
+/// Check if an expression is a top-level aggregate function call.
+fn is_aggregate_call(expr: &Expr) -> bool {
+    match expr {
+        Expr::FunctionCall { name, .. } => matches!(
+            name.to_lowercase().as_str(),
+            "count" | "sum" | "avg" | "min" | "max" | "collect"
+        ),
+        _ => false,
+    }
+}
+
 /// Generate a display name for a projection expression.
 fn expr_display_name(expr: &Expr) -> String {
     match expr {
@@ -1173,5 +1412,233 @@ mod tests {
             .unwrap();
         assert_eq!(result.num_rows(), 1);
         assert_eq!(result.rows()[0].get_string(0), Some("ALICE"));
+    }
+
+    // ── ORDER BY tests (Task 041) ──────────────────────────────
+
+    fn setup_persons(db: &Database) {
+        db.execute(
+            "CREATE NODE TABLE Person (id INT64, name STRING, age INT64, PRIMARY KEY (id))",
+        )
+        .unwrap();
+        db.execute("CREATE (n:Person {id: 1, name: 'Alice', age: 30})")
+            .unwrap();
+        db.execute("CREATE (n:Person {id: 2, name: 'Bob', age: 25})")
+            .unwrap();
+        db.execute("CREATE (n:Person {id: 3, name: 'Charlie', age: 35})")
+            .unwrap();
+        db.execute("CREATE (n:Person {id: 4, name: 'Diana', age: 28})")
+            .unwrap();
+    }
+
+    #[test]
+    fn order_by_asc() {
+        let db = Database::in_memory();
+        setup_persons(&db);
+
+        let result = db
+            .query("MATCH (n:Person) RETURN n.name ORDER BY n.age")
+            .unwrap();
+        assert_eq!(result.num_rows(), 4);
+        assert_eq!(result.rows()[0].get_string(0), Some("Bob"));
+        assert_eq!(result.rows()[1].get_string(0), Some("Diana"));
+        assert_eq!(result.rows()[2].get_string(0), Some("Alice"));
+        assert_eq!(result.rows()[3].get_string(0), Some("Charlie"));
+    }
+
+    #[test]
+    fn order_by_desc() {
+        let db = Database::in_memory();
+        setup_persons(&db);
+
+        let result = db
+            .query("MATCH (n:Person) RETURN n.name ORDER BY n.age DESC")
+            .unwrap();
+        assert_eq!(result.num_rows(), 4);
+        assert_eq!(result.rows()[0].get_string(0), Some("Charlie"));
+        assert_eq!(result.rows()[1].get_string(0), Some("Alice"));
+        assert_eq!(result.rows()[2].get_string(0), Some("Diana"));
+        assert_eq!(result.rows()[3].get_string(0), Some("Bob"));
+    }
+
+    #[test]
+    fn order_by_string() {
+        let db = Database::in_memory();
+        setup_persons(&db);
+
+        let result = db
+            .query("MATCH (n:Person) RETURN n.name ORDER BY n.name")
+            .unwrap();
+        assert_eq!(result.num_rows(), 4);
+        assert_eq!(result.rows()[0].get_string(0), Some("Alice"));
+        assert_eq!(result.rows()[1].get_string(0), Some("Bob"));
+        assert_eq!(result.rows()[2].get_string(0), Some("Charlie"));
+        assert_eq!(result.rows()[3].get_string(0), Some("Diana"));
+    }
+
+    // ── LIMIT tests (Task 041) ─────────────────────────────────
+
+    #[test]
+    fn limit_results() {
+        let db = Database::in_memory();
+        setup_persons(&db);
+
+        let result = db
+            .query("MATCH (n:Person) RETURN n.name LIMIT 2")
+            .unwrap();
+        assert_eq!(result.num_rows(), 2);
+    }
+
+    #[test]
+    fn limit_larger_than_result() {
+        let db = Database::in_memory();
+        setup_persons(&db);
+
+        let result = db
+            .query("MATCH (n:Person) RETURN n.name LIMIT 100")
+            .unwrap();
+        assert_eq!(result.num_rows(), 4);
+    }
+
+    // ── SKIP tests (Task 041) ──────────────────────────────────
+
+    #[test]
+    fn skip_results() {
+        let db = Database::in_memory();
+        setup_persons(&db);
+
+        let result = db
+            .query("MATCH (n:Person) RETURN n.name ORDER BY n.age SKIP 2")
+            .unwrap();
+        assert_eq!(result.num_rows(), 2);
+        assert_eq!(result.rows()[0].get_string(0), Some("Alice"));
+        assert_eq!(result.rows()[1].get_string(0), Some("Charlie"));
+    }
+
+    #[test]
+    fn skip_and_limit() {
+        let db = Database::in_memory();
+        setup_persons(&db);
+
+        let result = db
+            .query("MATCH (n:Person) RETURN n.name ORDER BY n.age SKIP 1 LIMIT 2")
+            .unwrap();
+        assert_eq!(result.num_rows(), 2);
+        assert_eq!(result.rows()[0].get_string(0), Some("Diana"));
+        assert_eq!(result.rows()[1].get_string(0), Some("Alice"));
+    }
+
+    // ── Aggregate tests (Task 040) ─────────────────────────────
+
+    #[test]
+    fn count_star() {
+        let db = Database::in_memory();
+        setup_persons(&db);
+
+        let result = db
+            .query("MATCH (n:Person) RETURN count(*)")
+            .unwrap();
+        assert_eq!(result.num_rows(), 1);
+        assert_eq!(result.rows()[0].get_int(0), Some(4));
+    }
+
+    #[test]
+    fn count_expression() {
+        let db = Database::in_memory();
+        setup_persons(&db);
+
+        let result = db
+            .query("MATCH (n:Person) RETURN count(n)")
+            .unwrap();
+        assert_eq!(result.num_rows(), 1);
+        assert_eq!(result.rows()[0].get_int(0), Some(4));
+    }
+
+    #[test]
+    fn sum_and_avg() {
+        let db = Database::in_memory();
+        setup_persons(&db);
+
+        let result = db
+            .query("MATCH (n:Person) RETURN sum(n.age), avg(n.age)")
+            .unwrap();
+        assert_eq!(result.num_rows(), 1);
+        // sum = 30 + 25 + 35 + 28 = 118
+        assert_eq!(result.rows()[0].get_int(0), Some(118));
+        // avg = 118 / 4 = 29.5
+        assert_eq!(result.rows()[0].get_float(1), Some(29.5));
+    }
+
+    #[test]
+    fn min_and_max() {
+        let db = Database::in_memory();
+        setup_persons(&db);
+
+        let result = db
+            .query("MATCH (n:Person) RETURN min(n.age), max(n.age)")
+            .unwrap();
+        assert_eq!(result.num_rows(), 1);
+        assert_eq!(result.rows()[0].get_int(0), Some(25));
+        assert_eq!(result.rows()[0].get_int(1), Some(35));
+    }
+
+    #[test]
+    fn group_by_with_count() {
+        let db = Database::in_memory();
+        db.execute(
+            "CREATE NODE TABLE Person (id INT64, name STRING, city STRING, PRIMARY KEY (id))",
+        )
+        .unwrap();
+        db.execute("CREATE (n:Person {id: 1, name: 'Alice', city: 'NYC'})")
+            .unwrap();
+        db.execute("CREATE (n:Person {id: 2, name: 'Bob', city: 'LA'})")
+            .unwrap();
+        db.execute("CREATE (n:Person {id: 3, name: 'Charlie', city: 'NYC'})")
+            .unwrap();
+        db.execute("CREATE (n:Person {id: 4, name: 'Diana', city: 'LA'})")
+            .unwrap();
+        db.execute("CREATE (n:Person {id: 5, name: 'Eve', city: 'NYC'})")
+            .unwrap();
+
+        let result = db
+            .query("MATCH (n:Person) RETURN n.city, count(n)")
+            .unwrap();
+        assert_eq!(result.num_rows(), 2);
+
+        // Find which row is NYC and which is LA
+        let rows = result.rows();
+        for row in rows {
+            let city = row.get_string(0).unwrap();
+            let count = row.get_int(1).unwrap();
+            match city {
+                "NYC" => assert_eq!(count, 3),
+                "LA" => assert_eq!(count, 2),
+                _ => panic!("unexpected city: {}", city),
+            }
+        }
+    }
+
+    #[test]
+    fn collect_aggregate() {
+        let db = Database::in_memory();
+        db.execute(
+            "CREATE NODE TABLE Person (id INT64, name STRING, PRIMARY KEY (id))",
+        )
+        .unwrap();
+        db.execute("CREATE (n:Person {id: 1, name: 'Alice'})").unwrap();
+        db.execute("CREATE (n:Person {id: 2, name: 'Bob'})").unwrap();
+
+        let result = db
+            .query("MATCH (n:Person) RETURN collect(n.name)")
+            .unwrap();
+        assert_eq!(result.num_rows(), 1);
+        // The result should be a list
+        let val = &result.rows()[0].values[0];
+        match val {
+            crate::types::value::Value::List(items) => {
+                assert_eq!(items.len(), 2);
+            }
+            _ => panic!("expected List, got {:?}", val),
+        }
     }
 }

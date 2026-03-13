@@ -3,7 +3,7 @@
 //! The physical plan specifies concrete algorithms (e.g., sequential scan,
 //! hash join) that the execution engine will run.
 
-use crate::parser::ast::{Direction, Expr};
+use crate::parser::ast::{Direction, Expr, OrderByItem};
 use crate::planner::logical::{BoundSetItem, JoinKey};
 use crate::types::data_type::DataType;
 
@@ -102,6 +102,30 @@ pub enum PhysicalPlan {
     /// DDL: Drop a table.
     DropTable { name: String },
 
+    /// Sort rows by expressions.
+    OrderBy {
+        input: Box<PhysicalPlan>,
+        items: Vec<OrderByItem>,
+    },
+
+    /// Limit output to N rows.
+    Limit {
+        input: Box<PhysicalPlan>,
+        count: Expr,
+    },
+
+    /// Skip the first N rows.
+    Skip {
+        input: Box<PhysicalPlan>,
+        count: Expr,
+    },
+
+    /// Aggregate with implicit GROUP BY from non-aggregate expressions.
+    Aggregate {
+        input: Box<PhysicalPlan>,
+        expressions: Vec<(Expr, Option<String>)>,
+    },
+
     /// Empty result (no-op).
     EmptyResult,
 }
@@ -116,6 +140,10 @@ impl PhysicalPlan {
             | PhysicalPlan::Projection { .. }
             | PhysicalPlan::ReturnAll { .. }
             | PhysicalPlan::HashJoin { .. }
+            | PhysicalPlan::OrderBy { .. }
+            | PhysicalPlan::Limit { .. }
+            | PhysicalPlan::Skip { .. }
+            | PhysicalPlan::Aggregate { .. }
             | PhysicalPlan::EmptyResult => true,
 
             PhysicalPlan::InsertNode { .. }
@@ -264,6 +292,29 @@ pub fn to_physical(
 
         LogicalOperator::DropTable { name } => PhysicalPlan::DropTable {
             name: name.clone(),
+        },
+
+        LogicalOperator::OrderBy { input, items } => PhysicalPlan::OrderBy {
+            input: Box::new(to_physical(input)),
+            items: items.clone(),
+        },
+
+        LogicalOperator::Limit { input, count } => PhysicalPlan::Limit {
+            input: Box::new(to_physical(input)),
+            count: count.clone(),
+        },
+
+        LogicalOperator::Skip { input, count } => PhysicalPlan::Skip {
+            input: Box::new(to_physical(input)),
+            count: count.clone(),
+        },
+
+        LogicalOperator::Aggregate {
+            input,
+            expressions,
+        } => PhysicalPlan::Aggregate {
+            input: Box::new(to_physical(input)),
+            expressions: expressions.clone(),
         },
 
         LogicalOperator::EmptyResult => PhysicalPlan::EmptyResult,

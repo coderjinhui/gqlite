@@ -56,7 +56,11 @@ Query: GQL String
 - **P0 查询处理 (021-027)**: ✅ 全部完成
 - **P0 集成层 (028-032)**: ✅ 全部完成
 - **P0 事务 (033-036)**: ✅ 全部完成 (SWMR + WAL + Recovery + Checkpoint)
-- **P1 (037-060)**: 未开始
+- **P1 查询增强 (037-044)**: 037/040/041 ✅ 完成 (WITH/ORDER BY/LIMIT/SKIP + Aggregate + Sort)
+- **P1 存储增强 (045-048)**: 未开始
+- **P1 导入导出 (049-051)**: 未开始
+- **P1 函数+接口 (052-056)**: 未开始
+- **P1 并行+路径 (057-060)**: 未开始
 
 ## 关键设计决策
 
@@ -67,8 +71,8 @@ Query: GQL String
 | 执行模型 | 物化 (Intermediate 全量返回) | 实现简单，后续可改流式 |
 | 并发模型 | SWMR (parking_lot) | 单写多读，类似 SQLite |
 | 序列化 | bincode | 高性能二进制，用于 Catalog 持久化 |
-| 查询语言 | Cypher 子集 | MATCH/WHERE/RETURN/CREATE/SET/DELETE + DDL |
+| 查询语言 | Cypher 子集 | MATCH/WHERE/RETURN/CREATE/SET/DELETE/ORDER BY/LIMIT/SKIP + DDL + 聚合 |
 
 ## 测试
 
-163 个测试（156 单元 + 2 基础集成 + 5 持久化集成），零 warning。运行：`cargo test`
+176 个测试（169 单元 + 2 基础集成 + 5 持久化集成），零 warning。运行：`cargo test`

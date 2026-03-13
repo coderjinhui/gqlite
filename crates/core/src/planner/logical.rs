@@ -111,6 +111,30 @@ pub enum LogicalOperator {
     /// Return all results (identity operator for top-level queries without projection).
     ReturnAll { input: Box<LogicalOperator> },
 
+    /// Sort rows by given expressions.
+    OrderBy {
+        input: Box<LogicalOperator>,
+        items: Vec<OrderByItem>,
+    },
+
+    /// Limit output to N rows.
+    Limit {
+        input: Box<LogicalOperator>,
+        count: Expr,
+    },
+
+    /// Skip the first N rows.
+    Skip {
+        input: Box<LogicalOperator>,
+        count: Expr,
+    },
+
+    /// Aggregate with implicit GROUP BY from non-aggregate expressions.
+    Aggregate {
+        input: Box<LogicalOperator>,
+        expressions: Vec<(Expr, Option<String>)>,
+    },
+
     /// Empty result (for standalone CREATE/INSERT).
     EmptyResult,
 }
@@ -246,7 +270,7 @@ impl<'a> Planner<'a> {
                         }
                     }
 
-                    // Build projection
+                    // Build projection or aggregate
                     if ret.return_all {
                         if let Some(input) = current_plan.take() {
                             current_plan = Some(LogicalOperator::ReturnAll {
@@ -259,11 +283,22 @@ impl<'a> Planner<'a> {
                             .iter()
                             .map(|item| (item.expr.clone(), item.alias.clone()))
                             .collect();
+                        let has_agg = ret
+                            .items
+                            .iter()
+                            .any(|item| contains_aggregate(&item.expr));
                         if let Some(input) = current_plan.take() {
-                            current_plan = Some(LogicalOperator::Projection {
-                                input: Box::new(input),
-                                expressions,
-                            });
+                            if has_agg {
+                                current_plan = Some(LogicalOperator::Aggregate {
+                                    input: Box::new(input),
+                                    expressions,
+                                });
+                            } else {
+                                current_plan = Some(LogicalOperator::Projection {
+                                    input: Box::new(input),
+                                    expressions,
+                                });
+                            }
                         }
                     }
                 }
@@ -293,9 +328,82 @@ impl<'a> Planner<'a> {
                         .collect();
                     pending_delete = Some((d.detach, vars));
                 }
-                BoundClause::With(_) | BoundClause::OrderBy(_)
-                | BoundClause::Limit(_) | BoundClause::Skip(_) => {
-                    // Will be handled in P1
+                BoundClause::With(items) => {
+                    // Apply pending filter first
+                    if let Some(predicate) = pending_filter.take() {
+                        if let Some(input) = current_plan.take() {
+                            current_plan = Some(LogicalOperator::Filter {
+                                input: Box::new(input),
+                                predicate,
+                            });
+                        }
+                    }
+                    // WITH acts like RETURN but feeds into next clause
+                    let expressions: Vec<(Expr, Option<String>)> = items
+                        .iter()
+                        .map(|item| (item.expr.clone(), item.alias.clone()))
+                        .collect();
+                    let has_agg = items
+                        .iter()
+                        .any(|item| contains_aggregate(&item.expr));
+                    if let Some(input) = current_plan.take() {
+                        if has_agg {
+                            current_plan = Some(LogicalOperator::Aggregate {
+                                input: Box::new(input),
+                                expressions,
+                            });
+                        } else {
+                            current_plan = Some(LogicalOperator::Projection {
+                                input: Box::new(input),
+                                expressions,
+                            });
+                        }
+                    }
+                }
+                BoundClause::OrderBy(items) => {
+                    if let Some(plan) = current_plan.take() {
+                        // Insert OrderBy before Projection so sort can
+                        // access pre-projection columns (e.g. ORDER BY n.age
+                        // when only RETURN n.name).
+                        match plan {
+                            LogicalOperator::Projection {
+                                input,
+                                expressions,
+                            } => {
+                                let sorted = LogicalOperator::OrderBy {
+                                    input,
+                                    items: items.clone(),
+                                };
+                                current_plan =
+                                    Some(LogicalOperator::Projection {
+                                        input: Box::new(sorted),
+                                        expressions,
+                                    });
+                            }
+                            other => {
+                                current_plan = Some(LogicalOperator::OrderBy {
+                                    input: Box::new(other),
+                                    items: items.clone(),
+                                });
+                            }
+                        }
+                    }
+                }
+                BoundClause::Limit(expr) => {
+                    if let Some(input) = current_plan.take() {
+                        current_plan = Some(LogicalOperator::Limit {
+                            input: Box::new(input),
+                            count: expr.clone(),
+                        });
+                    }
+                }
+                BoundClause::Skip(expr) => {
+                    if let Some(input) = current_plan.take() {
+                        current_plan = Some(LogicalOperator::Skip {
+                            input: Box::new(input),
+                            count: expr.clone(),
+                        });
+                    }
                 }
             }
         }
@@ -614,6 +722,28 @@ impl<'a> Planner<'a> {
             }
         }
         (src, dst)
+    }
+}
+
+/// Check if an expression contains an aggregate function call.
+fn contains_aggregate(expr: &Expr) -> bool {
+    match expr {
+        Expr::FunctionCall { name, args, .. } => {
+            if matches!(
+                name.to_lowercase().as_str(),
+                "count" | "sum" | "avg" | "min" | "max" | "collect"
+            ) {
+                return true;
+            }
+            args.iter().any(contains_aggregate)
+        }
+        Expr::Property(base, _) => contains_aggregate(base),
+        Expr::BinaryOp { left, right, .. } => {
+            contains_aggregate(left) || contains_aggregate(right)
+        }
+        Expr::UnaryOp { expr, .. } => contains_aggregate(expr),
+        Expr::IsNull { expr, .. } => contains_aggregate(expr),
+        _ => false,
     }
 }
 
