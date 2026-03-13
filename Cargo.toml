@@ -1,0 +1,21 @@
+[workspace]
+members = ["crates/core", "crates/cli"]
+resolver = "2"
+
+[workspace.package]
+edition = "2021"
+rust-version = "1.70"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/gqlite/gqlite"
+
+[workspace.dependencies]
+thiserror = "1"
+serde = { version = "1", features = ["derive"] }
+bincode = "1"
+uuid = { version = "1", features = ["v4"] }
+bitvec = "1"
+logos = "0.14"
+ahash = "0.8"
+parking_lot = "0.12"
+crc32fast = "1"
+gqlite-core = { path = "crates/core" }

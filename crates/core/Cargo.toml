@@ -1,0 +1,18 @@
+[package]
+name = "gqlite-core"
+version = "0.1.0"
+description = "Core library for gqlite — a lightweight embeddable graph database"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+thiserror = { workspace = true }
+serde = { workspace = true }
+bincode = { workspace = true }
+uuid = { workspace = true }
+bitvec = { workspace = true }
+logos = { workspace = true }
+ahash = { workspace = true }
+parking_lot = { workspace = true }
+crc32fast = { workspace = true }
