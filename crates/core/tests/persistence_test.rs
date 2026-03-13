@@ -1,0 +1,155 @@
+use gqlite_core::Database;
+use std::path::PathBuf;
+
+fn temp_db_path(name: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join("gqlite_tests");
+    std::fs::create_dir_all(&dir).unwrap();
+    dir.join(format!("{}.graph", name))
+}
+
+fn cleanup(path: &PathBuf) {
+    let _ = std::fs::remove_file(path);
+    let wal = path.with_extension("graph.wal");
+    let _ = std::fs::remove_file(&wal);
+}
+
+#[test]
+fn persistence_roundtrip() {
+    let path = temp_db_path("persist_roundtrip");
+    cleanup(&path);
+
+    // Phase 1: Create schema and insert data
+    {
+        let db = Database::open(&path).unwrap();
+        db.execute("CREATE NODE TABLE Person(id INT64, name STRING, PRIMARY KEY(id))")
+            .unwrap();
+        db.execute("CREATE (p:Person {id: 1, name: 'Alice'})").unwrap();
+        db.execute("CREATE (p:Person {id: 2, name: 'Bob'})").unwrap();
+        // db goes out of scope — WAL is flushed
+    }
+
+    // Phase 2: Reopen and verify data survived
+    {
+        let db = Database::open(&path).unwrap();
+        let result = db.query("MATCH (p:Person) RETURN p.id, p.name").unwrap();
+        assert_eq!(result.num_rows(), 2);
+
+        let rows = result.rows();
+        let names: Vec<&str> = rows.iter().filter_map(|r| r.get_string(1)).collect();
+        assert!(names.contains(&"Alice"));
+        assert!(names.contains(&"Bob"));
+    }
+
+    cleanup(&path);
+}
+
+#[test]
+fn persistence_with_relationships() {
+    let path = temp_db_path("persist_rels");
+    cleanup(&path);
+
+    // Phase 1: Create schema, nodes, and relationships
+    {
+        let db = Database::open(&path).unwrap();
+        db.execute("CREATE NODE TABLE Person(id INT64, name STRING, PRIMARY KEY(id))")
+            .unwrap();
+        db.execute("CREATE REL TABLE KNOWS(FROM Person TO Person)")
+            .unwrap();
+        db.execute("CREATE (p:Person {id: 1, name: 'Alice'})").unwrap();
+        db.execute("CREATE (p:Person {id: 2, name: 'Bob'})").unwrap();
+        db.execute("CREATE (p:Person {id: 3, name: 'Charlie'})").unwrap();
+        db.execute(
+            "MATCH (a:Person), (b:Person) WHERE a.id = 1 AND b.id = 2 CREATE (a)-[:KNOWS]->(b)",
+        )
+        .unwrap();
+        db.execute(
+            "MATCH (a:Person), (b:Person) WHERE a.id = 2 AND b.id = 3 CREATE (a)-[:KNOWS]->(b)",
+        )
+        .unwrap();
+    }
+
+    // Phase 2: Reopen and verify
+    {
+        let db = Database::open(&path).unwrap();
+
+        // Nodes survived
+        let result = db.query("MATCH (p:Person) RETURN p.id").unwrap();
+        assert_eq!(result.num_rows(), 3);
+
+        // Relationships survived
+        let result = db
+            .query("MATCH (a:Person)-[:KNOWS]->(b:Person) RETURN a.name, b.name")
+            .unwrap();
+        assert_eq!(result.num_rows(), 2);
+    }
+
+    cleanup(&path);
+}
+
+#[test]
+fn persistence_after_checkpoint() {
+    let path = temp_db_path("persist_checkpoint");
+    cleanup(&path);
+
+    // Phase 1: Create data and checkpoint
+    {
+        let db = Database::open(&path).unwrap();
+        db.execute("CREATE NODE TABLE Person(id INT64, name STRING, PRIMARY KEY(id))")
+            .unwrap();
+        db.execute("CREATE (p:Person {id: 1, name: 'Alice'})").unwrap();
+        db.execute("CREATE (p:Person {id: 2, name: 'Bob'})").unwrap();
+
+        // Checkpoint rewrites WAL as compact snapshot
+        db.checkpoint().unwrap();
+    }
+
+    // Phase 2: Reopen from checkpointed WAL
+    {
+        let db = Database::open(&path).unwrap();
+        let result = db.query("MATCH (p:Person) RETURN p.id, p.name").unwrap();
+        assert_eq!(result.num_rows(), 2);
+    }
+
+    cleanup(&path);
+}
+
+#[test]
+fn persistence_multiple_sessions() {
+    let path = temp_db_path("persist_multi");
+    cleanup(&path);
+
+    // Session 1: Create schema
+    {
+        let db = Database::open(&path).unwrap();
+        db.execute("CREATE NODE TABLE Person(id INT64, name STRING, PRIMARY KEY(id))")
+            .unwrap();
+        db.execute("CREATE (p:Person {id: 1, name: 'Alice'})").unwrap();
+    }
+
+    // Session 2: Add more data
+    {
+        let db = Database::open(&path).unwrap();
+        db.execute("CREATE (p:Person {id: 2, name: 'Bob'})").unwrap();
+    }
+
+    // Session 3: Verify all data
+    {
+        let db = Database::open(&path).unwrap();
+        let result = db.query("MATCH (p:Person) RETURN p.id").unwrap();
+        assert_eq!(result.num_rows(), 2);
+    }
+
+    cleanup(&path);
+}
+
+#[test]
+fn in_memory_database_no_file() {
+    let db = Database::in_memory();
+    db.execute("CREATE NODE TABLE Person(id INT64, name STRING, PRIMARY KEY(id))")
+        .unwrap();
+    db.execute("CREATE (p:Person {id: 1, name: 'Alice'})").unwrap();
+
+    let result = db.query("MATCH (p:Person) RETURN p.name").unwrap();
+    assert_eq!(result.num_rows(), 1);
+    assert_eq!(result.rows()[0].get_string(0), Some("Alice"));
+}
