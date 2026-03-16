@@ -1,7 +1,7 @@
 //! Graph algorithm procedures (degree centrality, WCC, Dijkstra, LPA, etc.).
 
 use std::cmp::Reverse;
-use std::collections::{BinaryHeap, HashMap, HashSet};
+use std::collections::{BinaryHeap, HashMap, HashSet, VecDeque};
 
 use super::{Procedure, ProcedureRow};
 use crate::error::GqliteError;
@@ -1023,6 +1023,195 @@ impl Procedure for TriangleCount {
             .into_iter()
             .map(|(_tid, offset, tri_count)| {
                 vec![Value::Int(offset as i64), Value::Int(tri_count)]
+            })
+            .collect();
+
+        Ok(rows)
+    }
+}
+
+// ── Betweenness Centrality (Brandes) ────────────────────────────
+
+/// Computes betweenness centrality for all nodes connected by a given
+/// relationship table using the Brandes algorithm (O(VE) for unweighted).
+///
+/// Usage: `CALL betweenness('REL_NAME') YIELD node_id, score`
+///
+/// Edges are treated as undirected. The final scores are divided by 2
+/// to account for the undirected double-counting inherent in Brandes.
+pub struct Betweenness;
+
+impl Procedure for Betweenness {
+    fn name(&self) -> &str {
+        "betweenness"
+    }
+
+    fn output_columns(&self) -> Vec<String> {
+        vec!["node_id".to_string(), "score".to_string()]
+    }
+
+    fn execute(
+        &self,
+        args: &[Value],
+        db: &crate::DatabaseInner,
+    ) -> Result<Vec<ProcedureRow>, GqliteError> {
+        // Extract relationship table name from arguments
+        let rel_name = match args.first() {
+            Some(Value::String(s)) => s.clone(),
+            _ => {
+                return Err(GqliteError::Execution(
+                    "betweenness requires a string argument (rel table name)".into(),
+                ))
+            }
+        };
+
+        let catalog = db.catalog.read().unwrap();
+        let storage = db.storage.read().unwrap();
+
+        // Find the relationship table entry in the catalog
+        let rel_entry = catalog.get_rel_table(&rel_name).ok_or_else(|| {
+            GqliteError::Execution(format!("relation table '{}' not found", rel_name))
+        })?;
+
+        let rel_table_id = rel_entry.table_id;
+        let src_table_id = rel_entry.src_table_id;
+        let dst_table_id = rel_entry.dst_table_id;
+
+        // Get the RelTable from storage
+        let rel_table = storage.rel_tables.get(&rel_table_id).ok_or_else(|| {
+            GqliteError::Execution(format!(
+                "relation table '{}' not found in storage",
+                rel_name
+            ))
+        })?;
+
+        // Collect all node offsets into a contiguous index.
+        let mut node_list: Vec<(u32, u64)> = Vec::new();
+        let mut node_index: HashMap<(u32, u64), usize> = HashMap::new();
+
+        let mut add_nodes = |table_id: u32, offsets: Vec<u64>| {
+            for offset in offsets {
+                let key = (table_id, offset);
+                if !node_index.contains_key(&key) {
+                    let idx = node_list.len();
+                    node_list.push(key);
+                    node_index.insert(key, idx);
+                }
+            }
+        };
+
+        // Scan source node table
+        if let Some(src_node_table) = storage.node_tables.get(&src_table_id) {
+            let offsets: Vec<u64> = src_node_table.scan().map(|(off, _)| off).collect();
+            add_nodes(src_table_id, offsets);
+        }
+
+        // Scan destination node table (if different from source)
+        if src_table_id != dst_table_id {
+            if let Some(dst_node_table) = storage.node_tables.get(&dst_table_id) {
+                let offsets: Vec<u64> = dst_node_table.scan().map(|(off, _)| off).collect();
+                add_nodes(dst_table_id, offsets);
+            }
+        }
+
+        let n = node_list.len();
+        if n == 0 {
+            return Ok(vec![]);
+        }
+
+        // Precompute undirected neighbor lists (forward + backward CSR, dedup).
+        let mut neighbors: Vec<Vec<usize>> = vec![Vec::new(); n];
+
+        for (idx, &(tid, offset)) in node_list.iter().enumerate() {
+            let mut nbr_set: HashSet<usize> = HashSet::new();
+
+            // Forward edges: this node as source
+            if tid == src_table_id {
+                for (dst_offset, _rel_id) in rel_table.get_rels_from(offset) {
+                    let dst_key = (dst_table_id, dst_offset);
+                    if let Some(&dst_idx) = node_index.get(&dst_key) {
+                        if dst_idx != idx {
+                            nbr_set.insert(dst_idx);
+                        }
+                    }
+                }
+            }
+            // Backward edges: this node as destination
+            if tid == dst_table_id {
+                for (src_offset, _rel_id) in rel_table.get_rels_to(offset) {
+                    let src_key = (src_table_id, src_offset);
+                    if let Some(&src_idx) = node_index.get(&src_key) {
+                        if src_idx != idx {
+                            nbr_set.insert(src_idx);
+                        }
+                    }
+                }
+            }
+
+            let mut sorted_nbrs: Vec<usize> = nbr_set.into_iter().collect();
+            sorted_nbrs.sort_unstable();
+            neighbors[idx] = sorted_nbrs;
+        }
+
+        // Brandes algorithm for betweenness centrality
+        let mut cb: Vec<f64> = vec![0.0; n];
+
+        for s in 0..n {
+            // BFS from source s
+            let mut stack: Vec<usize> = Vec::new();
+            let mut predecessors: Vec<Vec<usize>> = vec![Vec::new(); n];
+            let mut sigma: Vec<f64> = vec![0.0; n];
+            sigma[s] = 1.0;
+            let mut dist: Vec<i64> = vec![-1; n];
+            dist[s] = 0;
+            let mut queue: VecDeque<usize> = VecDeque::new();
+            queue.push_back(s);
+
+            while let Some(v) = queue.pop_front() {
+                stack.push(v);
+                for &w in &neighbors[v] {
+                    // First visit to w
+                    if dist[w] < 0 {
+                        dist[w] = dist[v] + 1;
+                        queue.push_back(w);
+                    }
+                    // Shortest path via v
+                    if dist[w] == dist[v] + 1 {
+                        sigma[w] += sigma[v];
+                        predecessors[w].push(v);
+                    }
+                }
+            }
+
+            // Back-propagation of dependencies
+            let mut delta: Vec<f64> = vec![0.0; n];
+            while let Some(w) = stack.pop() {
+                for &v in &predecessors[w] {
+                    delta[v] += (sigma[v] / sigma[w]) * (1.0 + delta[w]);
+                }
+                if w != s {
+                    cb[w] += delta[w];
+                }
+            }
+        }
+
+        // For undirected graphs, divide all scores by 2
+        for score in &mut cb {
+            *score /= 2.0;
+        }
+
+        // Build result rows sorted by (table_id, offset) for deterministic output.
+        let mut entries: Vec<(u32, u64, f64)> = node_list
+            .iter()
+            .enumerate()
+            .map(|(idx, &(tid, offset))| (tid, offset, cb[idx]))
+            .collect();
+        entries.sort_by_key(|&(tid, off, _)| (tid, off));
+
+        let rows: Vec<ProcedureRow> = entries
+            .into_iter()
+            .map(|(_tid, offset, score)| {
+                vec![Value::Int(offset as i64), Value::Float(score)]
             })
             .collect();
 

@@ -24,6 +24,7 @@ impl ProcedureRegistry {
         reg.register(Box::new(super::graph_algo::PageRank));
         reg.register(Box::new(super::graph_algo::LabelPropagation));
         reg.register(Box::new(super::graph_algo::TriangleCount));
+        reg.register(Box::new(super::graph_algo::Betweenness));
         reg
     }
 
