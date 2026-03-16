@@ -1759,6 +1759,36 @@ impl Engine {
                 cast_value(v, target_type)
             }
 
+            Expr::Case { operand, when_clauses, else_result } => {
+                match operand {
+                    Some(op) => {
+                        // Simple form: CASE operand WHEN value THEN result ...
+                        let op_val = self.eval_expr(op, columns, row)?;
+                        for (when_expr, then_expr) in when_clauses {
+                            let when_val = self.eval_expr(when_expr, columns, row)?;
+                            let eq = eval_binary_op(&op_val, &BinOp::Eq, &when_val)?;
+                            if eq == Value::Bool(true) {
+                                return self.eval_expr(then_expr, columns, row);
+                            }
+                        }
+                    }
+                    None => {
+                        // Searched form: CASE WHEN condition THEN result ...
+                        for (cond_expr, then_expr) in when_clauses {
+                            let cond_val = self.eval_expr(cond_expr, columns, row)?;
+                            if cond_val == Value::Bool(true) {
+                                return self.eval_expr(then_expr, columns, row);
+                            }
+                        }
+                    }
+                }
+                // No WHEN matched — evaluate ELSE or return NULL
+                match else_result {
+                    Some(el) => self.eval_expr(el, columns, row),
+                    None => Ok(Value::Null),
+                }
+            }
+
             Expr::Star => Ok(Value::Null),
             Expr::Param(name) => {
                 Ok(self.params.get(name).cloned().unwrap_or(Value::Null))

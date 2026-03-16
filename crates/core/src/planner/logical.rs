@@ -1023,6 +1023,25 @@ fn contains_aggregate(expr: &Expr) -> bool {
         }
         Expr::UnaryOp { expr, .. } => contains_aggregate(expr),
         Expr::IsNull { expr, .. } => contains_aggregate(expr),
+        Expr::Cast { expr, .. } => contains_aggregate(expr),
+        Expr::Case { operand, when_clauses, else_result } => {
+            if let Some(op) = operand {
+                if contains_aggregate(op) {
+                    return true;
+                }
+            }
+            for (cond, result) in when_clauses {
+                if contains_aggregate(cond) || contains_aggregate(result) {
+                    return true;
+                }
+            }
+            if let Some(el) = else_result {
+                if contains_aggregate(el) {
+                    return true;
+                }
+            }
+            false
+        }
         _ => false,
     }
 }

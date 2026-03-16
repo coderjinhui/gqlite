@@ -979,6 +979,7 @@ impl Parser {
                     target_type,
                 })
             }
+            Token::Case => self.parse_case_expr(),
             _ => Err(self.error(&format!("unexpected token: {:?}", self.peek()))),
         }
     }
@@ -1036,6 +1037,46 @@ impl Parser {
             name,
             distinct,
             args,
+        })
+    }
+
+    fn parse_case_expr(&mut self) -> Result<Expr, ParseError> {
+        self.expect(&Token::Case)?;
+
+        // Simple form: CASE <operand> WHEN ...
+        // Searched form: CASE WHEN ...
+        let operand = if !self.check(&Token::When) {
+            Some(Box::new(self.parse_expr()?))
+        } else {
+            None
+        };
+
+        let mut when_clauses = Vec::new();
+        while self.check(&Token::When) {
+            self.advance();
+            let condition = self.parse_expr()?;
+            self.expect(&Token::Then)?;
+            let result = self.parse_expr()?;
+            when_clauses.push((condition, result));
+        }
+
+        if when_clauses.is_empty() {
+            return Err(self.error("CASE requires at least one WHEN clause"));
+        }
+
+        let else_result = if self.check(&Token::Else) {
+            self.advance();
+            Some(Box::new(self.parse_expr()?))
+        } else {
+            None
+        };
+
+        self.expect(&Token::End)?;
+
+        Ok(Expr::Case {
+            operand,
+            when_clauses,
+            else_result,
         })
     }
 

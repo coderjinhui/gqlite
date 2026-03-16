@@ -396,6 +396,21 @@ fn collect_expr_aliases(expr: &Expr, aliases: &mut Vec<String>) {
                 collect_expr_aliases(item, aliases);
             }
         }
+        Expr::Cast { expr, .. } => {
+            collect_expr_aliases(expr, aliases);
+        }
+        Expr::Case { operand, when_clauses, else_result } => {
+            if let Some(op) = operand {
+                collect_expr_aliases(op, aliases);
+            }
+            for (cond, result) in when_clauses {
+                collect_expr_aliases(cond, aliases);
+                collect_expr_aliases(result, aliases);
+            }
+            if let Some(el) = else_result {
+                collect_expr_aliases(el, aliases);
+            }
+        }
         _ => {}
     }
 }
@@ -510,6 +525,21 @@ fn collect_expr_columns(expr: &Expr, cols: &mut Vec<ColumnRef>) {
         Expr::ListLit(items) => {
             for item in items {
                 collect_expr_columns(item, cols);
+            }
+        }
+        Expr::Cast { expr, .. } => {
+            collect_expr_columns(expr, cols);
+        }
+        Expr::Case { operand, when_clauses, else_result } => {
+            if let Some(op) = operand {
+                collect_expr_columns(op, cols);
+            }
+            for (cond, result) in when_clauses {
+                collect_expr_columns(cond, cols);
+                collect_expr_columns(result, cols);
+            }
+            if let Some(el) = else_result {
+                collect_expr_columns(el, cols);
             }
         }
         _ => {}

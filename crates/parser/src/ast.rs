@@ -318,6 +318,14 @@ pub enum Expr {
         expr: Box<Expr>,
         target_type: DataType,
     },
+    /// CASE expression (searched and simple forms).
+    /// - Searched: `CASE WHEN cond THEN result [ELSE default] END`
+    /// - Simple:   `CASE operand WHEN value THEN result [ELSE default] END`
+    Case {
+        operand: Option<Box<Expr>>,
+        when_clauses: Vec<(Expr, Expr)>,
+        else_result: Option<Box<Expr>>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

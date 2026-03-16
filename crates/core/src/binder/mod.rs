@@ -319,6 +319,19 @@ impl<'a> Binder<'a> {
                 Ok(())
             }
             Expr::Cast { expr, .. } => self.validate_expr(expr),
+            Expr::Case { operand, when_clauses, else_result } => {
+                if let Some(op) = operand {
+                    self.validate_expr(op)?;
+                }
+                for (cond, result) in when_clauses {
+                    self.validate_expr(cond)?;
+                    self.validate_expr(result)?;
+                }
+                if let Some(el) = else_result {
+                    self.validate_expr(el)?;
+                }
+                Ok(())
+            }
         }
     }
 
