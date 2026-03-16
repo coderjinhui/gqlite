@@ -16,6 +16,7 @@ Thumbs.db
 
 # gqlite test data
 *.graph
+*.graph.wal
 
 research/
 docs/
