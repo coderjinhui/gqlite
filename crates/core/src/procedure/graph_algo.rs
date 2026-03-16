@@ -1,4 +1,4 @@
-//! Graph algorithm procedures (degree centrality, WCC, Dijkstra, etc.).
+//! Graph algorithm procedures (degree centrality, WCC, Dijkstra, LPA, etc.).
 
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashMap};
@@ -647,6 +647,200 @@ impl Procedure for PageRank {
                     })
                     .unwrap_or(Value::Int(offset as i64));
                 vec![pk_val, Value::Float(score)]
+            })
+            .collect();
+
+        Ok(rows)
+    }
+}
+
+// ── Label Propagation (LPA) ─────────────────────────────────────
+
+/// Detects communities using the Label Propagation Algorithm (LPA).
+///
+/// Usage: `CALL label_propagation('REL_NAME') YIELD node_id, community`
+///
+/// Algorithm:
+/// 1. Initialize each node's label to its own contiguous index.
+/// 2. Iterate: set each node's label to the most frequent neighbor label
+///    (break ties by smallest label value).
+/// 3. Stop when no labels change or after 100 iterations.
+/// 4. Edges are treated as undirected (both forward and backward CSR).
+///
+/// Returns one row per node with its community label (the node offset of the
+/// representative node).
+pub struct LabelPropagation;
+
+impl Procedure for LabelPropagation {
+    fn name(&self) -> &str {
+        "label_propagation"
+    }
+
+    fn output_columns(&self) -> Vec<String> {
+        vec!["node_id".to_string(), "community".to_string()]
+    }
+
+    fn execute(
+        &self,
+        args: &[Value],
+        db: &crate::DatabaseInner,
+    ) -> Result<Vec<ProcedureRow>, GqliteError> {
+        // Extract relationship table name from arguments
+        let rel_name = match args.first() {
+            Some(Value::String(s)) => s.clone(),
+            _ => {
+                return Err(GqliteError::Execution(
+                    "label_propagation requires a string argument (rel table name)".into(),
+                ))
+            }
+        };
+
+        let catalog = db.catalog.read().unwrap();
+        let storage = db.storage.read().unwrap();
+
+        // Find the relationship table entry in the catalog
+        let rel_entry = catalog.get_rel_table(&rel_name).ok_or_else(|| {
+            GqliteError::Execution(format!("relation table '{}' not found", rel_name))
+        })?;
+
+        let rel_table_id = rel_entry.table_id;
+        let src_table_id = rel_entry.src_table_id;
+        let dst_table_id = rel_entry.dst_table_id;
+
+        // Get the RelTable from storage
+        let rel_table = storage.rel_tables.get(&rel_table_id).ok_or_else(|| {
+            GqliteError::Execution(format!(
+                "relation table '{}' not found in storage",
+                rel_name
+            ))
+        })?;
+
+        // Collect all node offsets into a contiguous index.
+        // Key: (table_id, offset) -> contiguous index
+        let mut node_list: Vec<(u32, u64)> = Vec::new();
+        let mut node_index: HashMap<(u32, u64), usize> = HashMap::new();
+
+        let mut add_nodes = |table_id: u32, offsets: Vec<u64>| {
+            for offset in offsets {
+                let key = (table_id, offset);
+                if !node_index.contains_key(&key) {
+                    let idx = node_list.len();
+                    node_list.push(key);
+                    node_index.insert(key, idx);
+                }
+            }
+        };
+
+        // Scan source node table
+        if let Some(src_node_table) = storage.node_tables.get(&src_table_id) {
+            let offsets: Vec<u64> = src_node_table.scan().map(|(off, _)| off).collect();
+            add_nodes(src_table_id, offsets);
+        }
+
+        // Scan destination node table (if different from source)
+        if src_table_id != dst_table_id {
+            if let Some(dst_node_table) = storage.node_tables.get(&dst_table_id) {
+                let offsets: Vec<u64> = dst_node_table.scan().map(|(off, _)| off).collect();
+                add_nodes(dst_table_id, offsets);
+            }
+        }
+
+        let n = node_list.len();
+        if n == 0 {
+            return Ok(vec![]);
+        }
+
+        // Precompute undirected neighbor lists.
+        // For undirected behavior, combine both get_rels_from (forward CSR)
+        // and get_rels_to (backward CSR).
+        let mut neighbors: Vec<Vec<usize>> = vec![Vec::new(); n];
+
+        for (idx, &(tid, offset)) in node_list.iter().enumerate() {
+            // Forward edges: this node as source
+            if tid == src_table_id {
+                for (dst_offset, _rel_id) in rel_table.get_rels_from(offset) {
+                    let dst_key = (dst_table_id, dst_offset);
+                    if let Some(&dst_idx) = node_index.get(&dst_key) {
+                        neighbors[idx].push(dst_idx);
+                    }
+                }
+            }
+            // Backward edges: this node as destination
+            if tid == dst_table_id {
+                for (src_offset, _rel_id) in rel_table.get_rels_to(offset) {
+                    let src_key = (src_table_id, src_offset);
+                    if let Some(&src_idx) = node_index.get(&src_key) {
+                        neighbors[idx].push(src_idx);
+                    }
+                }
+            }
+        }
+
+        // Deduplicate neighbor lists (an edge A->B appears as both forward
+        // from A and backward to B, but we only want each neighbor once).
+        for nbrs in &mut neighbors {
+            nbrs.sort_unstable();
+            nbrs.dedup();
+        }
+
+        // Initialize labels: each node's label = its contiguous index
+        let mut labels: Vec<usize> = (0..n).collect();
+
+        let max_iter = 100;
+
+        for _ in 0..max_iter {
+            let mut changed = false;
+
+            for idx in 0..n {
+                if neighbors[idx].is_empty() {
+                    continue; // isolated node keeps its own label
+                }
+
+                // Count frequency of each neighbor label
+                let mut freq: HashMap<usize, usize> = HashMap::new();
+                for &nbr_idx in &neighbors[idx] {
+                    *freq.entry(labels[nbr_idx]).or_insert(0) += 1;
+                }
+
+                // Find the most frequent label; break ties by smallest label
+                let mut best_label = labels[idx];
+                let mut best_count = 0;
+                for (&label, &count) in &freq {
+                    if count > best_count || (count == best_count && label < best_label) {
+                        best_label = label;
+                        best_count = count;
+                    }
+                }
+
+                if best_label != labels[idx] {
+                    labels[idx] = best_label;
+                    changed = true;
+                }
+            }
+
+            if !changed {
+                break;
+            }
+        }
+
+        // Build result rows sorted by (table_id, offset) for deterministic output.
+        // Community ID = the offset of the representative node (the node whose
+        // contiguous index equals the label).
+        let mut entries: Vec<(u32, u64, i64)> = node_list
+            .iter()
+            .enumerate()
+            .map(|(idx, &(tid, offset))| {
+                let label_idx = labels[idx];
+                let (_label_tid, label_offset) = node_list[label_idx];
+                (tid, offset, label_offset as i64)
+            })
+            .collect();
+        entries.sort_by_key(|&(tid, off, _)| (tid, off));
+
+        let rows: Vec<ProcedureRow> = entries
+            .into_iter()
+            .map(|(_tid, offset, community)| {
+                vec![Value::Int(offset as i64), Value::Int(community)]
             })
             .collect();
 
