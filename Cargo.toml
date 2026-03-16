@@ -6,7 +6,7 @@ resolver = "2"
 edition = "2021"
 rust-version = "1.70"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/gqlite/gqlite"
+repository = "https://github.com/coderjinhui/gqlite"
 
 [workspace.dependencies]
 thiserror = "1"
