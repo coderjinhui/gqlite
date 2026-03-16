@@ -48,4 +48,4 @@ Parser::parse_query(gql) → Statement
 | 错误类型 | 统一 `GqliteError` 枚举 |
 | 列命名 | SeqScan 输出: `[alias, alias.col1, alias.col2, ...]` |
 | 锁顺序 | catalog → storage（避免死锁） |
-| 测试 | 每模块底部 `#[cfg(test)] mod tests` |
+| 测试 | 放在 `tests/` 目录，文件命名 `<module>_test.rs` |

@@ -21,23 +21,37 @@ Query: GQL String
 
 | Crate | 路径 | 说明 |
 |-------|------|------|
-| gqlite-core | `crates/core/` | 引擎核心：存储、解析、规划、执行、事务 |
+| gqlite-parser | `crates/parser/` | 独立 Cypher 解析器：Lexer, AST, Parser, DataType |
+| gqlite-core | `crates/core/` | 引擎核心：存储、规划、执行、事务（依赖 gqlite-parser） |
 | gqlite-cli | `crates/cli/` | 交互式 REPL (rustyline) |
 
-## 核心模块索引 (crates/core/src/)
+每个 crate 必须包含：`Cargo.toml` + `src/` + `tests/`
+
+## gqlite-parser 模块索引 (crates/parser/)
 
 | 模块 | 路径 | 职责 |
 |------|------|------|
-| types | `types/` | DataType, Value, InternalId |
-| storage | `storage/` | ColumnChunk, NodeGroup, CSR, Pager, NodeTable, RelTable |
-| catalog | `catalog/` | 表元数据管理，bincode 序列化 |
-| parser | `parser/` | logos Lexer, AST, 递归下降 Parser |
-| binder | `binder/` | 语义绑定：变量解析、表名/列名匹配 |
-| planner | `planner/` | 逻辑计划生成 + 物理计划转换 |
-| executor | `executor/` | Engine (物化执行), DataChunk |
-| functions | `functions/` | FunctionRegistry, 标量函数, 聚合函数 |
-| transaction | `transaction/` | TransactionManager (SWMR), WAL (write/read/replay/checkpoint) |
-| error | `error.rs` | GqliteError 统一错误类型 |
+| token | `src/token.rs` | logos Lexer，Cypher 词法分析 |
+| ast | `src/ast.rs` | AST 节点类型定义 |
+| parser | `src/parser.rs` | 递归下降 Parser |
+| data_type | `src/data_type.rs` | DataType 枚举（规范定义） |
+| tests | `tests/` | parser_test.rs, token_test.rs, data_type_test.rs |
+
+## gqlite-core 模块索引 (crates/core/)
+
+| 模块 | 路径 | 职责 |
+|------|------|------|
+| types | `src/types/` | Value, InternalId（DataType 从 gqlite-parser re-export） |
+| storage | `src/storage/` | ColumnChunk, NodeGroup, CSR, Pager, NodeTable, RelTable |
+| catalog | `src/catalog/` | 表元数据管理，bincode 序列化 |
+| parser | `src/parser/` | re-export gqlite-parser（兼容层） |
+| binder | `src/binder/` | 语义绑定：变量解析、表名/列名匹配 |
+| planner | `src/planner/` | 逻辑计划生成 + 物理计划转换 |
+| executor | `src/executor/` | Engine (物化执行), DataChunk |
+| functions | `src/functions/` | FunctionRegistry, 标量函数, 聚合函数 |
+| transaction | `src/transaction/` | TransactionManager (SWMR), WAL |
+| error | `src/error.rs` | GqliteError 统一错误类型 |
+| tests | `tests/` | basic_test.rs, persistence_test.rs |
 
 ## 设计与计划文档
 
