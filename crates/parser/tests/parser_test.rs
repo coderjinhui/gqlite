@@ -477,3 +477,54 @@ fn var_length_exact() {
     };
     assert_eq!(r.var_length, Some((2, 2)));
 }
+
+// ── shortestPath parsing tests ──────────────────────────────
+
+#[test]
+fn shortest_path_basic() {
+    let stmt = parse(
+        "MATCH (a:Person), (b:Person), p = shortestPath((a)-[:KNOWS*..10]->(b)) RETURN p",
+    );
+    let Statement::Query(q) = stmt else { panic!() };
+    let Clause::Match(m) = &q.clauses[0] else {
+        panic!()
+    };
+    // Two regular path patterns (a:Person) and (b:Person)
+    assert_eq!(m.pattern.paths.len(), 2);
+    // One shortest-path pattern
+    assert_eq!(m.pattern.shortest_paths.len(), 1);
+    let sp = &m.pattern.shortest_paths[0];
+    assert_eq!(sp.path_variable, "p");
+    assert!(!sp.all_paths);
+    // Inner pattern: (a)-[:KNOWS*..10]->(b)
+    assert_eq!(sp.pattern.elements.len(), 3);
+    let PatternElement::Node(src) = &sp.pattern.elements[0] else {
+        panic!()
+    };
+    assert_eq!(src.alias.as_deref(), Some("a"));
+    let PatternElement::Rel(rel) = &sp.pattern.elements[1] else {
+        panic!()
+    };
+    assert_eq!(rel.label.as_deref(), Some("KNOWS"));
+    assert_eq!(rel.var_length, Some((1, 10)));
+    assert_eq!(rel.direction, Direction::Right);
+    let PatternElement::Node(dst) = &sp.pattern.elements[2] else {
+        panic!()
+    };
+    assert_eq!(dst.alias.as_deref(), Some("b"));
+}
+
+#[test]
+fn all_shortest_paths_parse() {
+    let stmt = parse(
+        "MATCH (a:Person), (b:Person), p = allShortestPaths((a)-[:KNOWS*..5]->(b)) RETURN p",
+    );
+    let Statement::Query(q) = stmt else { panic!() };
+    let Clause::Match(m) = &q.clauses[0] else {
+        panic!()
+    };
+    assert_eq!(m.pattern.shortest_paths.len(), 1);
+    let sp = &m.pattern.shortest_paths[0];
+    assert_eq!(sp.path_variable, "p");
+    assert!(sp.all_paths);
+}

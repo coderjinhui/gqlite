@@ -118,12 +118,60 @@ impl Parser {
     }
 
     fn parse_graph_pattern(&mut self) -> Result<GraphPattern, ParseError> {
-        let mut paths = vec![self.parse_path_pattern()?];
+        let mut paths = Vec::new();
+        let mut shortest_paths = Vec::new();
+
+        // Parse first element (path or shortest-path assignment)
+        self.parse_graph_pattern_element(&mut paths, &mut shortest_paths)?;
+
         while self.check(&Token::Comma) {
             self.advance();
-            paths.push(self.parse_path_pattern()?);
+            self.parse_graph_pattern_element(&mut paths, &mut shortest_paths)?;
         }
-        Ok(GraphPattern { paths })
+
+        Ok(GraphPattern { paths, shortest_paths })
+    }
+
+    /// Parse a single element in a comma-separated graph pattern.
+    /// It can be a regular path pattern `(a)-[:R]->(b)`, or a shortest-path
+    /// assignment `p = shortestPath((a)-[:R*..N]->(b))`.
+    fn parse_graph_pattern_element(
+        &mut self,
+        paths: &mut Vec<PathPattern>,
+        shortest_paths: &mut Vec<ShortestPathPattern>,
+    ) -> Result<(), ParseError> {
+        // Check for `ident = shortestPath(...)` or `ident = allShortestPaths(...)`
+        if let Token::Ident(_) = self.peek() {
+            if self.peek_at(1) == &Token::Eq {
+                // Look ahead: is the token after `=` an ident that matches shortestPath/allShortestPaths?
+                if let Token::Ident(func_name) = self.peek_at(2) {
+                    let lower = func_name.to_lowercase();
+                    if lower == "shortestpath" || lower == "allshortestpaths" {
+                        let sp = self.parse_shortest_path_pattern()?;
+                        shortest_paths.push(sp);
+                        return Ok(());
+                    }
+                }
+            }
+        }
+        paths.push(self.parse_path_pattern()?);
+        Ok(())
+    }
+
+    /// Parse `variable = shortestPath((pattern))` or `variable = allShortestPaths((pattern))`.
+    fn parse_shortest_path_pattern(&mut self) -> Result<ShortestPathPattern, ParseError> {
+        let path_variable = self.expect_ident()?;
+        self.expect(&Token::Eq)?;
+        let func_name = self.expect_ident()?;
+        let all_paths = func_name.to_lowercase() == "allshortestpaths";
+        self.expect(&Token::LParen)?;
+        let pattern = self.parse_path_pattern()?;
+        self.expect(&Token::RParen)?;
+        Ok(ShortestPathPattern {
+            path_variable,
+            pattern,
+            all_paths,
+        })
     }
 
     fn parse_path_pattern(&mut self) -> Result<PathPattern, ParseError> {

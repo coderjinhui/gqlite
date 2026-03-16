@@ -73,6 +73,20 @@ pub enum LogicalOperator {
         max_hops: u32,
     },
 
+    /// Shortest-path BFS: `p = shortestPath((a)-[:R*..N]->(b))`.
+    ShortestPath {
+        input: Box<LogicalOperator>,
+        rel_table_name: String,
+        rel_table_id: u32,
+        direction: Direction,
+        src_alias: String,
+        dst_alias: String,
+        path_alias: String,
+        dst_table_id: Option<u32>,
+        max_hops: u32,
+        all_paths: bool,
+    },
+
     /// Insert a new node.
     InsertNode {
         table_name: String,
@@ -681,6 +695,13 @@ impl<'a> Planner<'a> {
             }
         }
 
+        // Plan shortest-path patterns on top of the existing scan/expand plan.
+        for sp in &pattern.shortest_paths {
+            if let Some(input) = result.take() {
+                result = Some(self.plan_shortest_path(input, sp)?);
+            }
+        }
+
         Ok(result)
     }
 
@@ -1002,6 +1023,100 @@ impl<'a> Planner<'a> {
             }
         }
         (src, dst)
+    }
+
+    /// Plan a `shortestPath(...)` / `allShortestPaths(...)` pattern.
+    fn plan_shortest_path(
+        &self,
+        input: LogicalOperator,
+        sp: &ShortestPathPattern,
+    ) -> Result<LogicalOperator, GqliteError> {
+        // Extract source alias (first node) and destination alias (last node)
+        let src_alias = sp
+            .pattern
+            .elements
+            .first()
+            .and_then(|e| {
+                if let PatternElement::Node(n) = e {
+                    n.alias.clone()
+                } else {
+                    None
+                }
+            })
+            .unwrap_or_default();
+
+        let dst_alias = sp
+            .pattern
+            .elements
+            .last()
+            .and_then(|e| {
+                if let PatternElement::Node(n) = e {
+                    n.alias.clone()
+                } else {
+                    None
+                }
+            })
+            .unwrap_or_default();
+
+        // Extract rel info from the pattern (the first Rel element)
+        let rel = sp.pattern.elements.iter().find_map(|e| {
+            if let PatternElement::Rel(r) = e {
+                Some(r)
+            } else {
+                None
+            }
+        });
+
+        let rel = rel.ok_or_else(|| {
+            GqliteError::Other(
+                "shortestPath requires a relationship pattern".into(),
+            )
+        })?;
+
+        let (rel_table_name, rel_table_id) = if let Some(ref label) = rel.label {
+            let entry = self.catalog.get_rel_table(label).ok_or_else(|| {
+                GqliteError::Other(format!("rel table '{}' not found", label))
+            })?;
+            (label.clone(), entry.table_id)
+        } else {
+            return Err(GqliteError::Other(
+                "shortestPath requires a typed relationship".into(),
+            ));
+        };
+
+        // Resolve destination table id from the last node's label
+        let dst_table_id = sp
+            .pattern
+            .elements
+            .last()
+            .and_then(|e| {
+                if let PatternElement::Node(n) = e {
+                    n.label
+                        .as_ref()
+                        .and_then(|l| self.catalog.get_node_table(l))
+                        .map(|entry| entry.table_id)
+                } else {
+                    None
+                }
+            });
+
+        let max_hops = rel
+            .var_length
+            .map(|(_, max)| max)
+            .unwrap_or(u32::MAX);
+
+        Ok(LogicalOperator::ShortestPath {
+            input: Box::new(input),
+            rel_table_name,
+            rel_table_id,
+            direction: rel.direction,
+            src_alias,
+            dst_alias,
+            path_alias: sp.path_variable.clone(),
+            dst_table_id,
+            max_hops,
+            all_paths: sp.all_paths,
+        })
     }
 }
 

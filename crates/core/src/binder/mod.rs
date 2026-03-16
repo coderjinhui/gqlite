@@ -256,6 +256,59 @@ impl<'a> Binder<'a> {
                 }
             }
         }
+
+        // Bind shortest-path patterns: validate inner elements and register path variable
+        for sp in &pattern.shortest_paths {
+            for elem in &sp.pattern.elements {
+                match elem {
+                    PatternElement::Node(n) => {
+                        if let Some(ref label) = n.label {
+                            if self.catalog.get_node_table(label).is_none() {
+                                return Err(GqliteError::Parse(format!(
+                                    "node table '{}' not found",
+                                    label
+                                )));
+                            }
+                        }
+                        if let Some(ref alias) = n.alias {
+                            let table_id = n
+                                .label
+                                .as_ref()
+                                .and_then(|l| self.catalog.get_node_table(l))
+                                .map(|t| t.table_id);
+                            // Only define if not already in scope (node may be
+                            // defined in a preceding regular path pattern).
+                            if !self.scope.has(alias) {
+                                self.scope.define(BoundVariable {
+                                    name: alias.clone(),
+                                    table_id,
+                                    var_type: BoundVarType::Node {
+                                        label: n.label.clone(),
+                                    },
+                                });
+                            }
+                        }
+                    }
+                    PatternElement::Rel(r) => {
+                        if let Some(ref label) = r.label {
+                            if self.catalog.get_rel_table(label).is_none() {
+                                return Err(GqliteError::Parse(format!(
+                                    "relationship table '{}' not found",
+                                    label
+                                )));
+                            }
+                        }
+                    }
+                }
+            }
+            // Register the path variable (the `p` in `p = shortestPath(...)`)
+            self.scope.define(BoundVariable {
+                name: sp.path_variable.clone(),
+                table_id: None,
+                var_type: BoundVarType::Node { label: None }, // path variable, generic
+            });
+        }
+
         Ok(())
     }
 

@@ -30,7 +30,18 @@ pub fn fn_trim(args: &[Value]) -> Result<Value, GqliteError> {
 pub fn fn_length(args: &[Value]) -> Result<Value, GqliteError> {
     match args.first() {
         Some(Value::String(s)) => Ok(Value::Int(s.len() as i64)),
-        Some(Value::List(l)) => Ok(Value::Int(l.len() as i64)),
+        Some(Value::List(l)) => {
+            // If the list looks like a path (all InternalId), return number of
+            // edges (len - 1).  Otherwise return list length.
+            let is_path = !l.is_empty()
+                && l.iter()
+                    .all(|v| matches!(v, Value::InternalId(_)));
+            if is_path {
+                Ok(Value::Int((l.len() as i64) - 1))
+            } else {
+                Ok(Value::Int(l.len() as i64))
+            }
+        }
         Some(Value::Null) => Ok(Value::Null),
         _ => Err(GqliteError::Execution("length() expects a string or list".into())),
     }
@@ -274,6 +285,19 @@ pub fn fn_repeat(args: &[Value]) -> Result<Value, GqliteError> {
         }
         (Value::Null, _) | (_, Value::Null) => Ok(Value::Null),
         _ => Err(GqliteError::Execution("repeat() expects (string, int)".into())),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Path functions
+// ---------------------------------------------------------------------------
+
+/// `nodes(path)` — returns the list of node IDs in a path.
+pub fn fn_nodes(args: &[Value]) -> Result<Value, GqliteError> {
+    match args.first() {
+        Some(Value::List(l)) => Ok(Value::List(l.clone())),
+        Some(Value::Null) => Ok(Value::Null),
+        _ => Err(GqliteError::Execution("nodes() expects a path/list".into())),
     }
 }
 

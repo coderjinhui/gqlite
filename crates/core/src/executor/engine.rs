@@ -572,6 +572,34 @@ impl Engine {
                 )
             }
 
+            PhysicalPlan::ShortestPath {
+                input,
+                rel_table_name,
+                rel_table_id,
+                direction,
+                src_alias,
+                dst_alias,
+                path_alias,
+                dst_table_id,
+                max_hops,
+                all_paths,
+            } => {
+                let input_result = self.execute_operator(input, db, txn_id)?;
+                self.exec_shortest_path(
+                    db,
+                    input_result,
+                    rel_table_name,
+                    *rel_table_id,
+                    direction,
+                    src_alias,
+                    dst_alias,
+                    path_alias,
+                    dst_table_id,
+                    *max_hops,
+                    *all_paths,
+                )
+            }
+
             PhysicalPlan::HashJoin { build, probe, .. } => {
                 let build_result = self.execute_operator(build, db, txn_id)?;
                 let probe_result = self.execute_operator(probe, db, txn_id)?;
@@ -1025,6 +1053,157 @@ impl Engine {
                     }
                 }
             }
+        }
+
+        Ok(Intermediate {
+            columns: out_cols,
+            types: out_types,
+            rows: out_rows,
+        })
+    }
+
+    // ── Shortest Path (BFS with parent tracking) ────────────────
+
+    pub(crate) fn exec_shortest_path(
+        &self,
+        db: &Arc<DatabaseInner>,
+        input: Intermediate,
+        rel_table_name: &str,
+        rel_table_id: u32,
+        direction: &Direction,
+        src_alias: &str,
+        dst_alias: &str,
+        path_alias: &str,
+        dst_table_id: &Option<u32>,
+        max_hops: u32,
+        _all_paths: bool,
+    ) -> Result<Intermediate, GqliteError> {
+        use std::collections::{HashMap, VecDeque};
+
+        let storage = db.storage.read().unwrap();
+
+        let rel_table = storage.rel_tables.get(&rel_table_id).ok_or_else(|| {
+            GqliteError::Execution(format!("rel table '{}' not found", rel_table_name))
+        })?;
+
+        // Resolve table id for the destination endpoint
+        let dst_tid = dst_table_id.or_else(|| match direction {
+            Direction::Right => Some(rel_table.dst_table_id()),
+            Direction::Left => Some(rel_table.src_table_id()),
+            Direction::Both => Some(rel_table.dst_table_id()),
+        });
+
+        // Find column indices for src and dst aliases in input
+        let src_col = input
+            .columns
+            .iter()
+            .position(|c| c == src_alias)
+            .ok_or_else(|| {
+                GqliteError::Execution(format!(
+                    "source alias '{}' not found in input columns",
+                    src_alias
+                ))
+            })?;
+
+        let dst_col = input
+            .columns
+            .iter()
+            .position(|c| c == dst_alias)
+            .ok_or_else(|| {
+                GqliteError::Execution(format!(
+                    "destination alias '{}' not found in input columns",
+                    dst_alias
+                ))
+            })?;
+
+        // Build output columns: input cols + path_alias (List)
+        let mut out_cols = input.columns.clone();
+        let mut out_types = input.types.clone();
+        out_cols.push(path_alias.to_string());
+        out_types.push(DataType::String); // List type (no dedicated DataType; use String as placeholder)
+
+        let mut out_rows = Vec::new();
+
+        for row in &input.rows {
+            let src_id = match &row[src_col] {
+                Value::InternalId(id) => *id,
+                _ => continue,
+            };
+            let dst_id = match &row[dst_col] {
+                Value::InternalId(id) => *id,
+                _ => continue,
+            };
+
+            // Same node → path of length 0 (only the node itself)
+            if src_id.offset == dst_id.offset && src_id.table_id == dst_id.table_id {
+                let path_value = Value::List(vec![Value::InternalId(src_id)]);
+                let mut new_row = row.clone();
+                new_row.push(path_value);
+                out_rows.push(new_row);
+                continue;
+            }
+
+            // BFS from src_id to dst_id with parent tracking
+            let mut frontier: VecDeque<u64> = VecDeque::new();
+            let mut parent: HashMap<u64, u64> = HashMap::new();
+            frontier.push_back(src_id.offset);
+            parent.insert(src_id.offset, u64::MAX); // sentinel for root
+            let mut found = false;
+            let mut depth: u32 = 0;
+
+            'bfs: while !frontier.is_empty() && depth < max_hops {
+                let level_size = frontier.len();
+                depth += 1;
+
+                for _ in 0..level_size {
+                    let current = frontier.pop_front().unwrap();
+
+                    let neighbors = match direction {
+                        Direction::Right => rel_table.get_rels_from(current),
+                        Direction::Left => rel_table.get_rels_to(current),
+                        Direction::Both => {
+                            let mut all = rel_table.get_rels_from(current);
+                            all.extend(rel_table.get_rels_to(current));
+                            all
+                        }
+                    };
+
+                    for (neighbor_offset, _rel_id) in &neighbors {
+                        if parent.contains_key(neighbor_offset) {
+                            continue; // already visited
+                        }
+                        parent.insert(*neighbor_offset, current);
+
+                        if *neighbor_offset == dst_id.offset {
+                            found = true;
+                            break 'bfs;
+                        }
+
+                        frontier.push_back(*neighbor_offset);
+                    }
+                }
+            }
+
+            if found {
+                // Reconstruct path by backtracking through parent pointers
+                let src_table_id = dst_tid.unwrap_or(src_id.table_id);
+                let mut path_nodes: Vec<Value> = Vec::new();
+                let mut current = dst_id.offset;
+                while current != u64::MAX {
+                    path_nodes.push(Value::InternalId(InternalId::new(
+                        src_table_id,
+                        current,
+                    )));
+                    current = *parent.get(&current).unwrap_or(&u64::MAX);
+                }
+                path_nodes.reverse();
+
+                let path_value = Value::List(path_nodes);
+                let mut new_row = row.clone();
+                new_row.push(path_value);
+                out_rows.push(new_row);
+            }
+            // If no path found, skip this row (do not emit)
         }
 
         Ok(Intermediate {

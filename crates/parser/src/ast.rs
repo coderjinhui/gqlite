@@ -56,6 +56,19 @@ pub struct MatchClause {
 #[derive(Debug, Clone)]
 pub struct GraphPattern {
     pub paths: Vec<PathPattern>,
+    /// `p = shortestPath((a)-[:REL*..N]->(b))` assignments in MATCH.
+    pub shortest_paths: Vec<ShortestPathPattern>,
+}
+
+/// A `shortestPath(...)` or `allShortestPaths(...)` pattern assignment.
+#[derive(Debug, Clone)]
+pub struct ShortestPathPattern {
+    /// The variable name bound to the path (e.g., `p` in `p = shortestPath(...)`).
+    pub path_variable: String,
+    /// The inner path pattern describing the traversal.
+    pub pattern: PathPattern,
+    /// `false` for `shortestPath`, `true` for `allShortestPaths`.
+    pub all_paths: bool,
 }
 
 /// A chain of alternating node and relationship patterns.

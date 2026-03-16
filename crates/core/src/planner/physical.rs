@@ -173,6 +173,20 @@ pub enum PhysicalPlan {
         max_hops: u32,
     },
 
+    /// Shortest-path BFS: returns a path (list of node IDs) from src to dst.
+    ShortestPath {
+        input: Box<PhysicalPlan>,
+        rel_table_name: String,
+        rel_table_id: u32,
+        direction: Direction,
+        src_alias: String,
+        dst_alias: String,
+        path_alias: String,
+        dst_table_id: Option<u32>,
+        max_hops: u32,
+        all_paths: bool,
+    },
+
     /// Expand a list expression into multiple rows.
     Unwind {
         input: Box<PhysicalPlan>,
@@ -197,6 +211,7 @@ impl PhysicalPlan {
             PhysicalPlan::SeqScan { .. }
             | PhysicalPlan::CsrExpand { .. }
             | PhysicalPlan::RecursiveExpand { .. }
+            | PhysicalPlan::ShortestPath { .. }
             | PhysicalPlan::Filter { .. }
             | PhysicalPlan::Projection { .. }
             | PhysicalPlan::ReturnAll { .. }
@@ -318,6 +333,30 @@ pub fn to_physical(
             dst_table_id: *dst_table_id,
             min_hops: *min_hops,
             max_hops: *max_hops,
+        },
+
+        LogicalOperator::ShortestPath {
+            input,
+            rel_table_name,
+            rel_table_id,
+            direction,
+            src_alias,
+            dst_alias,
+            path_alias,
+            dst_table_id,
+            max_hops,
+            all_paths,
+        } => PhysicalPlan::ShortestPath {
+            input: Box::new(to_physical(input)),
+            rel_table_name: rel_table_name.clone(),
+            rel_table_id: *rel_table_id,
+            direction: *direction,
+            src_alias: src_alias.clone(),
+            dst_alias: dst_alias.clone(),
+            path_alias: path_alias.clone(),
+            dst_table_id: *dst_table_id,
+            max_hops: *max_hops,
+            all_paths: *all_paths,
         },
 
         LogicalOperator::InsertNode {

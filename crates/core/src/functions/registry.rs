@@ -59,6 +59,8 @@ impl FunctionRegistry {
         self.register_scalar("list_sort", scalar::fn_list_sort);
         self.register_scalar("list_distinct", scalar::fn_list_distinct);
         self.register_scalar("range", scalar::fn_range);
+        // Path functions
+        self.register_scalar("nodes", scalar::fn_nodes);
     }
 
     fn register_scalar(&mut self, name: &str, f: ScalarFn) {
