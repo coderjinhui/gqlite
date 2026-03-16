@@ -3,7 +3,7 @@
 //! The physical plan specifies concrete algorithms (e.g., sequential scan,
 //! hash join) that the execution engine will run.
 
-use crate::parser::ast::{Direction, Expr, OrderByItem};
+use crate::parser::ast::{AlterTableAction, Direction, Expr, OrderByItem};
 use crate::planner::logical::{BoundSetItem, JoinKey};
 use crate::types::data_type::DataType;
 
@@ -29,6 +29,7 @@ pub enum PhysicalPlan {
         rel_alias: Option<String>,
         dst_table_name: Option<String>,
         dst_table_id: Option<u32>,
+        optional: bool,
     },
 
     /// Apply a filter expression.
@@ -102,6 +103,28 @@ pub enum PhysicalPlan {
     /// DDL: Drop a table.
     DropTable { name: String },
 
+    /// DDL: Alter a table.
+    AlterTable {
+        table_name: String,
+        action: AlterTableAction,
+    },
+
+    /// COPY FROM CSV.
+    CopyFrom {
+        table_name: String,
+        file_path: String,
+        header: bool,
+        delimiter: char,
+    },
+
+    /// COPY TO CSV.
+    CopyTo {
+        source: crate::planner::logical::CopyToSource,
+        file_path: String,
+        header: bool,
+        delimiter: char,
+    },
+
     /// Sort rows by expressions.
     OrderBy {
         input: Box<PhysicalPlan>,
@@ -128,6 +151,43 @@ pub enum PhysicalPlan {
 
     /// Empty result (no-op).
     EmptyResult,
+
+    /// Combine two query results.
+    Union {
+        left: Box<PhysicalPlan>,
+        right: Box<PhysicalPlan>,
+        all: bool,
+    },
+
+    /// Variable-length recursive expand (BFS).
+    RecursiveExpand {
+        input: Box<PhysicalPlan>,
+        rel_table_name: String,
+        rel_table_id: u32,
+        direction: Direction,
+        src_alias: String,
+        dst_alias: String,
+        dst_table_name: Option<String>,
+        dst_table_id: Option<u32>,
+        min_hops: u32,
+        max_hops: u32,
+    },
+
+    /// Expand a list expression into multiple rows.
+    Unwind {
+        input: Box<PhysicalPlan>,
+        expr: Expr,
+        alias: String,
+    },
+
+    /// Upsert: match or create a node.
+    Merge {
+        table_name: String,
+        table_id: u32,
+        properties: Vec<(usize, Expr)>,
+        on_create: Vec<(usize, Expr)>,
+        on_match: Vec<(usize, Expr)>,
+    },
 }
 
 impl PhysicalPlan {
@@ -136,6 +196,7 @@ impl PhysicalPlan {
         match self {
             PhysicalPlan::SeqScan { .. }
             | PhysicalPlan::CsrExpand { .. }
+            | PhysicalPlan::RecursiveExpand { .. }
             | PhysicalPlan::Filter { .. }
             | PhysicalPlan::Projection { .. }
             | PhysicalPlan::ReturnAll { .. }
@@ -144,6 +205,8 @@ impl PhysicalPlan {
             | PhysicalPlan::Limit { .. }
             | PhysicalPlan::Skip { .. }
             | PhysicalPlan::Aggregate { .. }
+            | PhysicalPlan::Union { .. }
+            | PhysicalPlan::Unwind { .. }
             | PhysicalPlan::EmptyResult => true,
 
             PhysicalPlan::InsertNode { .. }
@@ -152,7 +215,11 @@ impl PhysicalPlan {
             | PhysicalPlan::Delete { .. }
             | PhysicalPlan::CreateNodeTable { .. }
             | PhysicalPlan::CreateRelTable { .. }
-            | PhysicalPlan::DropTable { .. } => false,
+            | PhysicalPlan::DropTable { .. }
+            | PhysicalPlan::AlterTable { .. }
+            | PhysicalPlan::CopyFrom { .. }
+            | PhysicalPlan::CopyTo { .. }
+            | PhysicalPlan::Merge { .. } => false,
         }
     }
 }
@@ -215,6 +282,7 @@ pub fn to_physical(
             rel_alias,
             dst_table_name,
             dst_table_id,
+            optional,
         } => PhysicalPlan::CsrExpand {
             input: Box::new(to_physical(input)),
             rel_table_name: rel_table_name.clone(),
@@ -225,6 +293,31 @@ pub fn to_physical(
             rel_alias: rel_alias.clone(),
             dst_table_name: dst_table_name.clone(),
             dst_table_id: *dst_table_id,
+            optional: *optional,
+        },
+
+        LogicalOperator::RecursiveExpand {
+            input,
+            rel_table_name,
+            rel_table_id,
+            direction,
+            src_alias,
+            dst_alias,
+            dst_table_name,
+            dst_table_id,
+            min_hops,
+            max_hops,
+        } => PhysicalPlan::RecursiveExpand {
+            input: Box::new(to_physical(input)),
+            rel_table_name: rel_table_name.clone(),
+            rel_table_id: *rel_table_id,
+            direction: *direction,
+            src_alias: src_alias.clone(),
+            dst_alias: dst_alias.clone(),
+            dst_table_name: dst_table_name.clone(),
+            dst_table_id: *dst_table_id,
+            min_hops: *min_hops,
+            max_hops: *max_hops,
         },
 
         LogicalOperator::InsertNode {
@@ -294,6 +387,35 @@ pub fn to_physical(
             name: name.clone(),
         },
 
+        LogicalOperator::AlterTable { table_name, action } => PhysicalPlan::AlterTable {
+            table_name: table_name.clone(),
+            action: action.clone(),
+        },
+
+        LogicalOperator::CopyFrom {
+            table_name,
+            file_path,
+            header,
+            delimiter,
+        } => PhysicalPlan::CopyFrom {
+            table_name: table_name.clone(),
+            file_path: file_path.clone(),
+            header: *header,
+            delimiter: *delimiter,
+        },
+
+        LogicalOperator::CopyTo {
+            source,
+            file_path,
+            header,
+            delimiter,
+        } => PhysicalPlan::CopyTo {
+            source: source.clone(),
+            file_path: file_path.clone(),
+            header: *header,
+            delimiter: *delimiter,
+        },
+
         LogicalOperator::OrderBy { input, items } => PhysicalPlan::OrderBy {
             input: Box::new(to_physical(input)),
             items: items.clone(),
@@ -318,5 +440,35 @@ pub fn to_physical(
         },
 
         LogicalOperator::EmptyResult => PhysicalPlan::EmptyResult,
+
+        LogicalOperator::Union { left, right, all } => PhysicalPlan::Union {
+            left: Box::new(to_physical(left)),
+            right: Box::new(to_physical(right)),
+            all: *all,
+        },
+
+        LogicalOperator::Unwind {
+            input,
+            expr,
+            alias,
+        } => PhysicalPlan::Unwind {
+            input: Box::new(to_physical(input)),
+            expr: expr.clone(),
+            alias: alias.clone(),
+        },
+
+        LogicalOperator::Merge {
+            table_name,
+            table_id,
+            properties,
+            on_create,
+            on_match,
+        } => PhysicalPlan::Merge {
+            table_name: table_name.clone(),
+            table_id: *table_id,
+            properties: properties.clone(),
+            on_create: on_create.clone(),
+            on_match: on_match.clone(),
+        },
     }
 }

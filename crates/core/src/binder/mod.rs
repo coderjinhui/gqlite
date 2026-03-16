@@ -62,6 +62,40 @@ impl<'a> Binder<'a> {
             Statement::DropTable(s) => Ok(BoundStatement::DropTable {
                 name: s.name.clone(),
             }),
+            Statement::AlterTable(s) => Ok(BoundStatement::AlterTable {
+                table_name: s.table_name.clone(),
+                action: s.action.clone(),
+            }),
+            Statement::CopyFrom(s) => Ok(BoundStatement::CopyFrom {
+                table_name: s.table_name.clone(),
+                file_path: s.file_path.clone(),
+                header: s.header,
+                delimiter: s.delimiter,
+            }),
+            Statement::CopyTo(s) => {
+                let source = match &s.source {
+                    CopySource::Table(name) => BoundCopySource::Table(name.clone()),
+                    CopySource::Query(q) => {
+                        let bound = self.bind(&Statement::Query(q.as_ref().clone()))?;
+                        BoundCopySource::Query(Box::new(bound))
+                    }
+                };
+                Ok(BoundStatement::CopyTo {
+                    source,
+                    file_path: s.file_path.clone(),
+                    header: s.header,
+                    delimiter: s.delimiter,
+                })
+            }
+            Statement::Union { left, right, all } => {
+                let bound_left = self.bind(left)?;
+                let bound_right = self.bind(right)?;
+                Ok(BoundStatement::Union {
+                    left: Box::new(bound_left),
+                    right: Box::new(bound_right),
+                    all: *all,
+                })
+            }
         }
     }
 
@@ -136,6 +170,27 @@ impl<'a> Binder<'a> {
                 }
                 Clause::Skip(s) => {
                     bound_clauses.push(BoundClause::Skip(s.count.clone()));
+                }
+                Clause::Unwind(u) => {
+                    self.validate_expr(&u.expr)?;
+                    // Register the unwound variable in scope
+                    self.scope.define(BoundVariable {
+                        name: u.alias.clone(),
+                        table_id: None,
+                        var_type: BoundVarType::Node { label: None },
+                    });
+                    bound_clauses.push(BoundClause::Unwind {
+                        expr: u.expr.clone(),
+                        alias: u.alias.clone(),
+                    });
+                }
+                Clause::Merge(m) => {
+                    self.bind_match_pattern(&m.pattern)?;
+                    bound_clauses.push(BoundClause::Merge(BoundMerge {
+                        pattern: m.pattern.clone(),
+                        on_create: m.on_create.clone(),
+                        on_match: m.on_match.clone(),
+                    }));
                 }
             }
         }
@@ -257,6 +312,13 @@ impl<'a> Binder<'a> {
             | Expr::NullLit
             | Expr::Param(_)
             | Expr::Star => Ok(()),
+            Expr::ListLit(items) => {
+                for item in items {
+                    self.validate_expr(item)?;
+                }
+                Ok(())
+            }
+            Expr::Cast { expr, .. } => self.validate_expr(expr),
         }
     }
 
@@ -331,6 +393,33 @@ pub enum BoundStatement {
     DropTable {
         name: String,
     },
+    AlterTable {
+        table_name: String,
+        action: AlterTableAction,
+    },
+    CopyFrom {
+        table_name: String,
+        file_path: String,
+        header: bool,
+        delimiter: char,
+    },
+    CopyTo {
+        source: BoundCopySource,
+        file_path: String,
+        header: bool,
+        delimiter: char,
+    },
+    Union {
+        left: Box<BoundStatement>,
+        right: Box<BoundStatement>,
+        all: bool,
+    },
+}
+
+#[derive(Debug, Clone)]
+pub enum BoundCopySource {
+    Table(String),
+    Query(Box<BoundStatement>),
 }
 
 #[derive(Debug, Clone)]
@@ -350,6 +439,8 @@ pub enum BoundClause {
     OrderBy(Vec<OrderByItem>),
     Limit(Expr),
     Skip(Expr),
+    Unwind { expr: Expr, alias: String },
+    Merge(BoundMerge),
 }
 
 #[derive(Debug, Clone)]
@@ -369,6 +460,13 @@ pub struct BoundReturn {
 pub struct BoundDelete {
     pub detach: bool,
     pub exprs: Vec<Expr>,
+}
+
+#[derive(Debug, Clone)]
+pub struct BoundMerge {
+    pub pattern: GraphPattern,
+    pub on_create: Vec<SetItem>,
+    pub on_match: Vec<SetItem>,
 }
 
 #[cfg(test)]

@@ -55,6 +55,22 @@ pub enum LogicalOperator {
         /// Target node table for the destination.
         dst_table_name: Option<String>,
         dst_table_id: Option<u32>,
+        /// If true, produce NULLs for unmatched rows (left outer join).
+        optional: bool,
+    },
+
+    /// Variable-length recursive expand (BFS): `(a)-[*min..max]->(b)`.
+    RecursiveExpand {
+        input: Box<LogicalOperator>,
+        rel_table_name: String,
+        rel_table_id: u32,
+        direction: Direction,
+        src_alias: String,
+        dst_alias: String,
+        dst_table_name: Option<String>,
+        dst_table_id: Option<u32>,
+        min_hops: u32,
+        max_hops: u32,
     },
 
     /// Insert a new node.
@@ -137,6 +153,58 @@ pub enum LogicalOperator {
 
     /// Empty result (for standalone CREATE/INSERT).
     EmptyResult,
+
+    /// Combine two query results (UNION / UNION ALL).
+    Union {
+        left: Box<LogicalOperator>,
+        right: Box<LogicalOperator>,
+        all: bool,
+    },
+
+    /// Expand a list expression into multiple rows.
+    Unwind {
+        input: Box<LogicalOperator>,
+        expr: Expr,
+        alias: String,
+    },
+
+    /// Upsert: match or create a pattern.
+    Merge {
+        table_name: String,
+        table_id: u32,
+        properties: Vec<(usize, Expr)>,
+        on_create: Vec<(usize, Expr)>,
+        on_match: Vec<(usize, Expr)>,
+    },
+
+    /// DDL: Alter a table.
+    AlterTable {
+        table_name: String,
+        action: AlterTableAction,
+    },
+
+    /// COPY FROM: import CSV into a table.
+    CopyFrom {
+        table_name: String,
+        file_path: String,
+        header: bool,
+        delimiter: char,
+    },
+
+    /// COPY TO: export data to CSV.
+    CopyTo {
+        source: CopyToSource,
+        file_path: String,
+        header: bool,
+        delimiter: char,
+    },
+}
+
+/// Source for COPY TO operation.
+#[derive(Debug, Clone)]
+pub enum CopyToSource {
+    Table(String),
+    Query(Box<LogicalOperator>),
 }
 
 /// Join key reference.
@@ -193,6 +261,54 @@ impl<'a> Planner<'a> {
             BoundStatement::DropTable { name } => {
                 Ok(LogicalOperator::DropTable { name: name.clone() })
             }
+            BoundStatement::AlterTable { table_name, action } => {
+                Ok(LogicalOperator::AlterTable {
+                    table_name: table_name.clone(),
+                    action: action.clone(),
+                })
+            }
+            BoundStatement::CopyFrom {
+                table_name,
+                file_path,
+                header,
+                delimiter,
+            } => Ok(LogicalOperator::CopyFrom {
+                table_name: table_name.clone(),
+                file_path: file_path.clone(),
+                header: *header,
+                delimiter: *delimiter,
+            }),
+            BoundStatement::CopyTo {
+                source,
+                file_path,
+                header,
+                delimiter,
+            } => {
+                let copy_source = match source {
+                    crate::binder::BoundCopySource::Table(name) => {
+                        CopyToSource::Table(name.clone())
+                    }
+                    crate::binder::BoundCopySource::Query(bound_stmt) => {
+                        let plan = self.plan(bound_stmt)?;
+                        CopyToSource::Query(Box::new(plan))
+                    }
+                };
+                Ok(LogicalOperator::CopyTo {
+                    source: copy_source,
+                    file_path: file_path.clone(),
+                    header: *header,
+                    delimiter: *delimiter,
+                })
+            }
+            BoundStatement::Union { left, right, all } => {
+                let left_plan = self.plan(left)?;
+                let right_plan = self.plan(right)?;
+                Ok(LogicalOperator::Union {
+                    left: Box::new(left_plan),
+                    right: Box::new(right_plan),
+                    all: *all,
+                })
+            }
         }
     }
 
@@ -206,34 +322,47 @@ impl<'a> Planner<'a> {
         for clause in &q.clauses {
             match clause {
                 BoundClause::Match(m) => {
-                    let match_plan = self.plan_match_pattern(&m.pattern)?;
-                    current_plan = Some(match match_plan {
-                        Some(plan) => {
-                            if let Some(existing) = current_plan {
-                                // Multiple MATCH → cross product (simplified as nested)
-                                // In practice we'd join on shared variables
-                                LogicalOperator::HashJoin {
-                                    build: Box::new(existing),
-                                    probe: Box::new(plan),
-                                    build_key: JoinKey {
-                                        alias: String::new(),
-                                        column: String::new(),
-                                    },
-                                    probe_key: JoinKey {
-                                        alias: String::new(),
-                                        column: String::new(),
-                                    },
+                    if m.optional {
+                        if let Some(existing) = current_plan.take() {
+                            // OPTIONAL MATCH after a previous MATCH:
+                            // Feed existing rows into the expand with optional=true.
+                            let expanded =
+                                self.plan_optional_match_expand(&m.pattern, existing)?;
+                            current_plan = Some(expanded);
+                        } else {
+                            // OPTIONAL MATCH without prior MATCH — treat as regular match
+                            let match_plan = self.plan_match_pattern(&m.pattern, true)?;
+                            current_plan = match_plan;
+                        }
+                    } else {
+                        let match_plan = self.plan_match_pattern(&m.pattern, false)?;
+                        current_plan = Some(match match_plan {
+                            Some(plan) => {
+                                if let Some(existing) = current_plan {
+                                    // Multiple MATCH → cross product (simplified as nested)
+                                    LogicalOperator::HashJoin {
+                                        build: Box::new(existing),
+                                        probe: Box::new(plan),
+                                        build_key: JoinKey {
+                                            alias: String::new(),
+                                            column: String::new(),
+                                        },
+                                        probe_key: JoinKey {
+                                            alias: String::new(),
+                                            column: String::new(),
+                                        },
+                                    }
+                                } else {
+                                    plan
                                 }
-                            } else {
-                                plan
                             }
-                        }
-                        None => {
-                            return Err(GqliteError::Other(
-                                "empty MATCH pattern".into(),
-                            ))
-                        }
-                    });
+                            None => {
+                                return Err(GqliteError::Other(
+                                    "empty MATCH pattern".into(),
+                                ))
+                            }
+                        });
+                    }
                 }
                 BoundClause::Where(expr) => {
                     pending_filter = Some(expr.clone());
@@ -405,6 +534,72 @@ impl<'a> Planner<'a> {
                         });
                     }
                 }
+                BoundClause::Unwind { expr, alias } => {
+                    let input = current_plan
+                        .take()
+                        .unwrap_or(LogicalOperator::EmptyResult);
+                    current_plan = Some(LogicalOperator::Unwind {
+                        input: Box::new(input),
+                        expr: expr.clone(),
+                        alias: alias.clone(),
+                    });
+                }
+                BoundClause::Merge(m) => {
+                    // MERGE on a single node pattern
+                    if let Some(path) = m.pattern.paths.first() {
+                        if let Some(PatternElement::Node(n)) = path.elements.first() {
+                            if let Some(ref label) = n.label {
+                                let entry =
+                                    self.catalog.get_node_table(label).ok_or_else(|| {
+                                        GqliteError::Other(format!(
+                                            "table '{}' not found",
+                                            label
+                                        ))
+                                    })?;
+                                let properties: Vec<(usize, Expr)> = n
+                                    .properties
+                                    .iter()
+                                    .filter_map(|(name, expr)| {
+                                        entry
+                                            .columns
+                                            .iter()
+                                            .position(|c| c.name == *name)
+                                            .map(|idx| (idx, expr.clone()))
+                                    })
+                                    .collect();
+                                let on_create: Vec<(usize, Expr)> = m
+                                    .on_create
+                                    .iter()
+                                    .filter_map(|item| {
+                                        entry
+                                            .columns
+                                            .iter()
+                                            .position(|c| c.name == item.property.field)
+                                            .map(|idx| (idx, item.value.clone()))
+                                    })
+                                    .collect();
+                                let on_match: Vec<(usize, Expr)> = m
+                                    .on_match
+                                    .iter()
+                                    .filter_map(|item| {
+                                        entry
+                                            .columns
+                                            .iter()
+                                            .position(|c| c.name == item.property.field)
+                                            .map(|idx| (idx, item.value.clone()))
+                                    })
+                                    .collect();
+                                current_plan = Some(LogicalOperator::Merge {
+                                    table_name: label.clone(),
+                                    table_id: entry.table_id,
+                                    properties,
+                                    on_create,
+                                    on_match,
+                                });
+                            }
+                        }
+                    }
+                }
             }
         }
 
@@ -459,11 +654,12 @@ impl<'a> Planner<'a> {
     fn plan_match_pattern(
         &self,
         pattern: &GraphPattern,
+        optional: bool,
     ) -> Result<Option<LogicalOperator>, GqliteError> {
         let mut result: Option<LogicalOperator> = None;
 
         for path in &pattern.paths {
-            let plan = self.plan_path_pattern(path)?;
+            let plan = self.plan_path_pattern(path, optional)?;
             if let Some(plan) = plan {
                 result = Some(if let Some(existing) = result {
                     // Multiple comma-separated patterns → cross join
@@ -488,10 +684,78 @@ impl<'a> Planner<'a> {
         Ok(result)
     }
 
+    /// Plan an OPTIONAL MATCH by appending Expand operators (with optional=true)
+    /// on top of the existing plan. The first node in each path is assumed to
+    /// already exist in the existing plan's output, so we skip creating a ScanNode
+    /// for it and feed the existing plan into the Expand instead.
+    fn plan_optional_match_expand(
+        &self,
+        pattern: &GraphPattern,
+        existing: LogicalOperator,
+    ) -> Result<LogicalOperator, GqliteError> {
+        let mut current = existing;
+
+        for path in &pattern.paths {
+            let mut first_node = true;
+            let mut last_alias = String::new();
+
+            for elem in &path.elements {
+                match elem {
+                    PatternElement::Node(n) => {
+                        let alias = n.alias.clone().unwrap_or_default();
+                        if first_node {
+                            // Skip ScanNode — this alias already exists in the existing plan
+                            first_node = false;
+                        }
+                        last_alias = alias;
+                    }
+                    PatternElement::Rel(r) => {
+                        let src_alias = last_alias.clone();
+                        let dst_alias = self.next_node_alias_from_path(path, r)?;
+
+                        let (rel_table_name, rel_table_id) =
+                            if let Some(ref label) = r.label {
+                                let entry =
+                                    self.catalog.get_rel_table(label).ok_or_else(|| {
+                                        GqliteError::Other(format!(
+                                            "rel table '{}' not found",
+                                            label
+                                        ))
+                                    })?;
+                                (label.clone(), entry.table_id)
+                            } else {
+                                (String::new(), 0)
+                            };
+
+                        let (dst_table_name, dst_table_id) =
+                            self.resolve_dst_table(path, r);
+
+                        current = LogicalOperator::Expand {
+                            input: Box::new(current),
+                            rel_table_name,
+                            rel_table_id,
+                            direction: r.direction,
+                            src_alias,
+                            dst_alias: dst_alias.clone(),
+                            rel_alias: r.alias.clone(),
+                            dst_table_name,
+                            dst_table_id,
+                            optional: true,
+                        };
+                        last_alias = dst_alias;
+                    }
+                }
+            }
+        }
+
+        Ok(current)
+    }
+
     /// Plan a single path pattern: (a:Label)-[r:Rel]->(b:Label)
     fn plan_path_pattern(
         &self,
         path: &PathPattern,
+        optional: bool,
     ) -> Result<Option<LogicalOperator>, GqliteError> {
         let mut current: Option<LogicalOperator> = None;
         let mut last_alias = String::new();
@@ -545,17 +809,33 @@ impl<'a> Planner<'a> {
 
                     let (dst_table_name, dst_table_id) = self.resolve_dst_table(path, r);
 
-                    current = Some(LogicalOperator::Expand {
-                        input: Box::new(input),
-                        rel_table_name,
-                        rel_table_id,
-                        direction: r.direction,
-                        src_alias,
-                        dst_alias: dst_alias.clone(),
-                        rel_alias: r.alias.clone(),
-                        dst_table_name,
-                        dst_table_id,
-                    });
+                    if let Some((min_hops, max_hops)) = r.var_length {
+                        current = Some(LogicalOperator::RecursiveExpand {
+                            input: Box::new(input),
+                            rel_table_name,
+                            rel_table_id,
+                            direction: r.direction,
+                            src_alias,
+                            dst_alias: dst_alias.clone(),
+                            dst_table_name,
+                            dst_table_id,
+                            min_hops,
+                            max_hops,
+                        });
+                    } else {
+                        current = Some(LogicalOperator::Expand {
+                            input: Box::new(input),
+                            rel_table_name,
+                            rel_table_id,
+                            direction: r.direction,
+                            src_alias,
+                            dst_alias: dst_alias.clone(),
+                            rel_alias: r.alias.clone(),
+                            dst_table_name,
+                            dst_table_id,
+                            optional,
+                        });
+                    }
                     last_alias = dst_alias;
                 }
             }
