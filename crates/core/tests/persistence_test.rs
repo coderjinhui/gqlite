@@ -333,3 +333,45 @@ fn checkpoint_with_relationships() {
 
     cleanup(&path);
 }
+
+#[test]
+fn auto_checkpoint_triggers() {
+    use gqlite_core::DatabaseConfig;
+
+    let path = temp_db_path("auto_ckpt");
+    cleanup(&path);
+
+    // Use a very low threshold to trigger auto-checkpoint
+    let config = DatabaseConfig {
+        checkpoint_threshold: 5,
+        ..DatabaseConfig::default()
+    };
+
+    {
+        let db = Database::open_with_config(&path, config).unwrap();
+        db.execute("CREATE NODE TABLE Person(id INT64, name STRING, PRIMARY KEY(id))")
+            .unwrap();
+        // Insert enough rows to exceed threshold (each INSERT = multiple WAL records)
+        for i in 1..=10 {
+            db.execute(&format!("CREATE (p:Person {{id: {}, name: 'P{}'}})", i, i))
+                .unwrap();
+        }
+        // Auto-checkpoint should have created .graph file
+        assert!(path.exists(), ".graph should exist after auto-checkpoint");
+    }
+
+    // Delete WAL, verify data recovers from .graph
+    let wal_path = path.with_extension("graph.wal");
+    let _ = std::fs::remove_file(&wal_path);
+
+    {
+        let db = Database::open(&path).unwrap();
+        let result = db.query("MATCH (p:Person) RETURN p.id").unwrap();
+        assert!(
+            result.num_rows() > 0,
+            "data should survive via .graph after auto-checkpoint"
+        );
+    }
+
+    cleanup(&path);
+}

@@ -248,9 +248,11 @@ impl Database {
         }
 
         // Phase 2: Replay WAL (incremental if we loaded from main file)
+        let mut wal_record_count = 0u64;
         if wal_path.exists() {
             let mut reader = transaction::wal::WalReader::open(&wal_path)?;
             let records = reader.read_all()?;
+            wal_record_count = records.len() as u64;
             if !records.is_empty() {
                 let wal_max = if checkpoint_ts > 0 {
                     transaction::wal::replay_wal_incremental(
@@ -272,7 +274,9 @@ impl Database {
         let wal = if config.read_only {
             None
         } else if wal_path.exists() {
-            Some(WalWriter::open_append(&wal_path)?)
+            let mut w = WalWriter::open_append(&wal_path)?;
+            w.set_record_count(wal_record_count);
+            Some(w)
         } else {
             Some(WalWriter::create(&wal_path)?)
         };
@@ -364,59 +368,55 @@ impl Database {
     ///
     /// Crash-safe: writes to `.graph.tmp` first, then atomically renames.
     pub fn checkpoint(&self) -> Result<(), GqliteError> {
-        let mut wal_guard = self.inner.wal.lock();
-        let wal = match wal_guard.as_mut() {
-            Some(w) => w,
-            None => return Ok(()), // in-memory — nothing to do
-        };
-
-        let catalog = self.inner.catalog.read().unwrap();
-        let storage_guard = self.inner.storage.read().unwrap();
-        let checkpoint_ts = self.inner.txn_manager.last_committed_id();
-
-        let db_path = &self.inner.path;
-        let tmp_path = db_path.with_extension("graph.tmp");
-
-        // Remove residual .graph.tmp from a previous crash
-        let _ = std::fs::remove_file(&tmp_path);
-
-        // Create the temporary main file
-        let mut pager = storage::pager::Pager::create(&tmp_path)?;
-
-        // Write Catalog starting at page 1
-        let catalog_start: storage::pager::PageId = 1;
-        catalog.save_to(&mut pager, catalog_start)?;
-
-        // Compute Storage start page = 1 + pages used by catalog
-        let catalog_bytes = catalog.to_bytes()?;
-        let page_size = pager.page_size() as usize;
-        let catalog_pages = (8 + catalog_bytes.len() + page_size - 1) / page_size;
-        let storage_start = catalog_start + catalog_pages as u64;
-
-        // Write Storage
-        storage_guard.save_to(&mut pager, storage_start)?;
-
-        // Update file header
-        {
-            let header = pager.header_mut();
-            header.catalog_page_idx = catalog_start;
-            header.storage_page_idx = storage_start;
-            header.checkpoint_ts = checkpoint_ts;
-        }
-        pager.flush_header()?;
-        pager.sync()?;
-
-        // Drop pager to release file handle before rename
-        drop(pager);
-
-        // Atomic rename: .graph.tmp → .graph
-        std::fs::rename(&tmp_path, db_path)?;
-
-        // Clear the WAL
-        wal.clear()?;
-
-        Ok(())
+        checkpoint_impl(&self.inner)
     }
+}
+
+// ── Checkpoint implementation ──────────────────────────────────
+
+/// Standalone checkpoint logic, callable from both Database::checkpoint and auto-checkpoint.
+fn checkpoint_impl(inner: &DatabaseInner) -> Result<(), GqliteError> {
+    let mut wal_guard = inner.wal.lock();
+    let wal = match wal_guard.as_mut() {
+        Some(w) => w,
+        None => return Ok(()),
+    };
+
+    let catalog = inner.catalog.read().unwrap();
+    let storage_guard = inner.storage.read().unwrap();
+    let checkpoint_ts = inner.txn_manager.last_committed_id();
+
+    let db_path = &inner.path;
+    let tmp_path = db_path.with_extension("graph.tmp");
+
+    let _ = std::fs::remove_file(&tmp_path);
+
+    let mut pager = storage::pager::Pager::create(&tmp_path)?;
+
+    let catalog_start: storage::pager::PageId = 1;
+    catalog.save_to(&mut pager, catalog_start)?;
+
+    let catalog_bytes = catalog.to_bytes()?;
+    let page_size = pager.page_size() as usize;
+    let catalog_pages = (8 + catalog_bytes.len() + page_size - 1) / page_size;
+    let storage_start = catalog_start + catalog_pages as u64;
+
+    storage_guard.save_to(&mut pager, storage_start)?;
+
+    {
+        let header = pager.header_mut();
+        header.catalog_page_idx = catalog_start;
+        header.storage_page_idx = storage_start;
+        header.checkpoint_ts = checkpoint_ts;
+    }
+    pager.flush_header()?;
+    pager.sync()?;
+    drop(pager);
+
+    std::fs::rename(&tmp_path, db_path)?;
+    wal.clear()?;
+
+    Ok(())
 }
 
 // ── Connection ──────────────────────────────────────────────────
@@ -481,21 +481,27 @@ impl Connection {
             let txn_id = txn.id;
             let engine = Engine::with_snapshot(txn.start_ts, params);
             let result = engine.execute_plan(&physical, &self.db, txn_id);
+            let mut should_checkpoint = false;
             match &result {
                 Ok(_) => {
-                    // Write TxnCommit to WAL
                     let mut wal_guard = self.db.wal.lock();
                     if let Some(wal) = wal_guard.as_mut() {
                         wal.append(&WalRecord {
                             txn_id,
                             payload: WalPayload::TxnCommit,
                         })?;
+                        should_checkpoint = self.db.config.auto_checkpoint
+                            && wal.record_count() >= self.db.config.checkpoint_threshold;
                     }
                     self.db.txn_manager.commit(&mut txn);
                 }
                 Err(_) => {
                     self.db.txn_manager.rollback(&mut txn);
                 }
+            }
+            drop(_write_guard);
+            if should_checkpoint {
+                let _ = checkpoint_impl(&self.db);
             }
             result
         }
@@ -556,6 +562,7 @@ impl PreparedStatement {
             let txn_id = txn.id;
             let engine = Engine::with_snapshot(txn.start_ts, params);
             let result = engine.execute_plan(&self.plan, &self.db, txn_id);
+            let mut should_checkpoint = false;
             match &result {
                 Ok(_) => {
                     let mut wal_guard = self.db.wal.lock();
@@ -564,12 +571,18 @@ impl PreparedStatement {
                             txn_id,
                             payload: WalPayload::TxnCommit,
                         })?;
+                        should_checkpoint = self.db.config.auto_checkpoint
+                            && wal.record_count() >= self.db.config.checkpoint_threshold;
                     }
                     txn_manager.commit(&mut txn);
                 }
                 Err(_) => {
                     txn_manager.rollback(&mut txn);
                 }
+            }
+            drop(_write_guard);
+            if should_checkpoint {
+                let _ = checkpoint_impl(&self.db);
             }
             result
         }

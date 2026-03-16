@@ -108,6 +108,7 @@ pub struct WalRecord {
 pub struct WalWriter {
     writer: BufWriter<File>,
     path: PathBuf,
+    record_count: u64,
 }
 
 impl WalWriter {
@@ -129,6 +130,7 @@ impl WalWriter {
         Ok(Self {
             writer,
             path: path.to_path_buf(),
+            record_count: 0,
         })
     }
 
@@ -140,6 +142,7 @@ impl WalWriter {
         Ok(Self {
             writer,
             path: path.to_path_buf(),
+            record_count: 0,
         })
     }
 
@@ -163,6 +166,7 @@ impl WalWriter {
 
         // fsync to guarantee durability
         self.writer.get_ref().sync_data()?;
+        self.record_count += 1;
 
         Ok(())
     }
@@ -178,7 +182,18 @@ impl WalWriter {
         file.set_len(WAL_HEADER_SIZE as u64)?;
         file.seek(SeekFrom::Start(WAL_HEADER_SIZE as u64))?;
         file.sync_all()?;
+        self.record_count = 0;
         Ok(())
+    }
+
+    /// Return the number of records appended since last create/clear.
+    pub fn record_count(&self) -> u64 {
+        self.record_count
+    }
+
+    /// Set the record count (e.g. after WAL replay to reflect existing records).
+    pub fn set_record_count(&mut self, count: u64) {
+        self.record_count = count;
     }
 }
 
