@@ -1,4 +1,5 @@
 use bitvec::prelude::*;
+use chrono::Datelike;
 use serde::{Deserialize, Serialize};
 
 use crate::error::GqliteError;
@@ -124,6 +125,29 @@ impl ColumnChunk {
                     Value::Null
                 }
             }
+            DataType::Date => {
+                let offset = idx * 4;
+                let bytes: [u8; 4] = self.buffer[offset..offset + 4].try_into().unwrap();
+                let days = i32::from_le_bytes(bytes);
+                match chrono::NaiveDate::from_num_days_from_ce_opt(days) {
+                    Some(d) => Value::Date(d),
+                    None => Value::Null,
+                }
+            }
+            DataType::DateTime => {
+                let offset = idx * 8;
+                let bytes: [u8; 8] = self.buffer[offset..offset + 8].try_into().unwrap();
+                let millis = i64::from_le_bytes(bytes);
+                match chrono::DateTime::from_timestamp_millis(millis) {
+                    Some(dt) => Value::DateTime(dt.naive_utc()),
+                    None => Value::Null,
+                }
+            }
+            DataType::Duration => {
+                let offset = idx * 8;
+                let bytes: [u8; 8] = self.buffer[offset..offset + 8].try_into().unwrap();
+                Value::Duration(i64::from_le_bytes(bytes))
+            }
         }
     }
 
@@ -166,6 +190,20 @@ impl ColumnChunk {
                     }
                     strings[idx] = Some(s.clone());
                 }
+            }
+            (DataType::Date, Value::Date(d)) => {
+                let offset = idx * 4;
+                self.buffer[offset..offset + 4]
+                    .copy_from_slice(&d.num_days_from_ce().to_le_bytes());
+            }
+            (DataType::DateTime, Value::DateTime(dt)) => {
+                let offset = idx * 8;
+                let millis = dt.and_utc().timestamp_millis();
+                self.buffer[offset..offset + 8].copy_from_slice(&millis.to_le_bytes());
+            }
+            (DataType::Duration, Value::Duration(ms)) => {
+                let offset = idx * 8;
+                self.buffer[offset..offset + 8].copy_from_slice(&ms.to_le_bytes());
             }
             _ => {} // type mismatch — silently ignore
         }

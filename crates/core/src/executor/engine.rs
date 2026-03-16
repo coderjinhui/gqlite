@@ -2412,6 +2412,9 @@ fn cast_value(v: Value, target: &DataType) -> Result<Value, GqliteError> {
         DataType::InternalId => Err(GqliteError::Execution(
             "cannot cast to InternalId".into(),
         )),
+        DataType::Date | DataType::DateTime | DataType::Duration => Err(GqliteError::Execution(
+            format!("cannot cast to {}", target),
+        )),
     }
 }
 
@@ -2618,6 +2621,9 @@ fn parse_csv_value(field: &str, dt: &DataType) -> Result<Value, GqliteError> {
         DataType::InternalId => Err(GqliteError::Other(
             "cannot import InternalId from CSV".into(),
         )),
+        DataType::Date | DataType::DateTime | DataType::Duration => Err(GqliteError::Other(
+            format!("cannot import {} from CSV", dt),
+        )),
     }
 }
 
@@ -2635,6 +2641,9 @@ fn value_to_csv_string(v: &Value) -> String {
             format!("[{}]", parts.join(","))
         }
         Value::Bytes(b) => format!("0x{}", b.iter().map(|byte| format!("{:02x}", byte)).collect::<String>()),
+        Value::Date(d) => d.to_string(),
+        Value::DateTime(dt) => dt.to_string(),
+        Value::Duration(ms) => format!("PT{}S", *ms as f64 / 1000.0),
     }
 }
 

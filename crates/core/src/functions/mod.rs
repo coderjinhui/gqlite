@@ -3,3 +3,4 @@
 pub mod registry;
 pub mod scalar;
 pub mod aggregate;
+pub mod datetime;

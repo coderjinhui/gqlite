@@ -7,6 +7,7 @@ use crate::types::value::Value;
 
 use super::scalar;
 use super::aggregate;
+use super::datetime;
 
 /// A scalar function: takes a list of values, returns one value.
 pub type ScalarFn = fn(&[Value]) -> Result<Value, GqliteError>;
@@ -75,6 +76,10 @@ impl FunctionRegistry {
         // Conversion functions
         self.register_scalar("tointeger", scalar::fn_to_integer);
         self.register_scalar("tofloat", scalar::fn_to_float);
+        // Date/time functions
+        self.register_scalar("date", datetime::fn_date);
+        self.register_scalar("datetime", datetime::fn_datetime);
+        self.register_scalar("timestamp", datetime::fn_timestamp);
     }
 
     fn register_scalar(&mut self, name: &str, f: ScalarFn) {

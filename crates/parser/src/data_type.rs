@@ -11,6 +11,12 @@ pub enum DataType {
     InternalId,
     /// Auto-incrementing integer (stored as Int64, auto-assigned on INSERT).
     Serial,
+    /// Calendar date (i32 days since CE epoch).
+    Date,
+    /// Date and time (i64 milliseconds since Unix epoch).
+    DateTime,
+    /// Duration in milliseconds (i64).
+    Duration,
 }
 
 impl DataType {
@@ -22,6 +28,9 @@ impl DataType {
             DataType::Double => Some(8),
             DataType::InternalId => Some(12), // u32 + u64
             DataType::String => None,
+            DataType::Date => Some(4),       // i32 days since CE
+            DataType::DateTime => Some(8),   // i64 millis since epoch
+            DataType::Duration => Some(8),   // i64 millis
         }
     }
 
@@ -40,6 +49,9 @@ impl fmt::Display for DataType {
             DataType::String => write!(f, "STRING"),
             DataType::InternalId => write!(f, "INTERNAL_ID"),
             DataType::Serial => write!(f, "SERIAL"),
+            DataType::Date => write!(f, "DATE"),
+            DataType::DateTime => write!(f, "DATETIME"),
+            DataType::Duration => write!(f, "DURATION"),
         }
     }
 }
