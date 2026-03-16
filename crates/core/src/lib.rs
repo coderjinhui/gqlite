@@ -85,14 +85,14 @@ impl Default for DatabaseConfig {
 
 // ── DatabaseInner ───────────────────────────────────────────────
 
-pub(crate) struct DatabaseInner {
-    pub(crate) path: PathBuf,
-    pub(crate) config: DatabaseConfig,
-    pub(crate) catalog: RwLock<Catalog>,
-    pub(crate) storage: RwLock<Storage>,
-    pub(crate) txn_manager: TransactionManager,
+pub struct DatabaseInner {
+    pub path: PathBuf,
+    pub config: DatabaseConfig,
+    pub catalog: RwLock<Catalog>,
+    pub storage: RwLock<Storage>,
+    pub txn_manager: TransactionManager,
     /// WAL writer — None for in-memory databases.
-    pub(crate) wal: Mutex<Option<WalWriter>>,
+    pub wal: Mutex<Option<WalWriter>>,
 }
 
 // ── Database ────────────────────────────────────────────────────
@@ -102,7 +102,7 @@ pub(crate) struct DatabaseInner {
 /// Database is `Clone + Send + Sync` via `Arc<DatabaseInner>`.
 #[derive(Clone)]
 pub struct Database {
-    pub(crate) inner: Arc<DatabaseInner>,
+    pub inner: Arc<DatabaseInner>,
 }
 
 impl Database {

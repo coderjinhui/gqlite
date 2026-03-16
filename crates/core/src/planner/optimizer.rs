@@ -258,7 +258,7 @@ fn push_conjuncts(plan: LogicalOperator, conjuncts: Vec<Expr>) -> LogicalOperato
 }
 
 /// Split an AND expression into individual conjuncts.
-fn split_conjuncts(expr: Expr) -> Vec<Expr> {
+pub fn split_conjuncts(expr: Expr) -> Vec<Expr> {
     match expr {
         Expr::BinaryOp {
             left,
@@ -274,7 +274,7 @@ fn split_conjuncts(expr: Expr) -> Vec<Expr> {
 }
 
 /// Combine conjuncts back into a single AND expression.
-fn combine_conjuncts(conjuncts: Vec<Expr>) -> Option<Expr> {
+pub fn combine_conjuncts(conjuncts: Vec<Expr>) -> Option<Expr> {
     let mut iter = conjuncts.into_iter();
     let first = iter.next()?;
     Some(iter.fold(first, |acc, expr| Expr::BinaryOp {
@@ -296,7 +296,7 @@ fn wrap_with_filter(plan: LogicalOperator, conjuncts: Vec<Expr>) -> LogicalOpera
 }
 
 /// Collect all aliases (variable names) available in a plan sub-tree.
-fn collect_plan_aliases(plan: &LogicalOperator) -> Vec<String> {
+pub fn collect_plan_aliases(plan: &LogicalOperator) -> Vec<String> {
     let mut aliases = Vec::new();
     collect_aliases_recursive(plan, &mut aliases);
     aliases
@@ -356,7 +356,7 @@ fn collect_aliases_recursive(plan: &LogicalOperator, aliases: &mut Vec<String>) 
 }
 
 /// Extract all variable aliases referenced by an expression.
-fn referenced_aliases(expr: &Expr) -> Vec<String> {
+pub fn referenced_aliases(expr: &Expr) -> Vec<String> {
     let mut aliases = Vec::new();
     collect_expr_aliases(expr, &mut aliases);
     aliases.sort();
@@ -659,260 +659,3 @@ fn apply_projection_pushdown(
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::binder::Binder;
-    use crate::catalog::{Catalog, ColumnDef};
-    use crate::parser::parser::Parser;
-    use crate::planner::logical::Planner;
-    use crate::types::data_type::DataType;
-
-    fn test_catalog() -> Catalog {
-        let mut catalog = Catalog::new();
-        catalog
-            .create_node_table(
-                "Person",
-                vec![
-                    ColumnDef {
-                        column_id: 0,
-                        name: "id".into(),
-                        data_type: DataType::Int64,
-                        nullable: false,
-                    },
-                    ColumnDef {
-                        column_id: 1,
-                        name: "name".into(),
-                        data_type: DataType::String,
-                        nullable: true,
-                    },
-                    ColumnDef {
-                        column_id: 2,
-                        name: "age".into(),
-                        data_type: DataType::Int64,
-                        nullable: true,
-                    },
-                ],
-                "id",
-            )
-            .unwrap();
-        catalog
-            .create_node_table(
-                "City",
-                vec![
-                    ColumnDef {
-                        column_id: 0,
-                        name: "id".into(),
-                        data_type: DataType::Int64,
-                        nullable: false,
-                    },
-                    ColumnDef {
-                        column_id: 1,
-                        name: "name".into(),
-                        data_type: DataType::String,
-                        nullable: true,
-                    },
-                ],
-                "id",
-            )
-            .unwrap();
-        catalog
-            .create_rel_table("KNOWS", "Person", "Person", vec![])
-            .unwrap();
-        catalog
-            .create_rel_table("LIVES_IN", "Person", "City", vec![])
-            .unwrap();
-        catalog
-    }
-
-    fn plan_and_optimize(catalog: &Catalog, query: &str) -> LogicalOperator {
-        let stmt = Parser::parse_query(query).unwrap();
-        let mut binder = Binder::new(catalog);
-        let bound = binder.bind(&stmt).unwrap();
-        let planner = Planner::new(catalog);
-        let logical = planner.plan(&bound).unwrap();
-        optimize(logical)
-    }
-
-    // ── Filter push-down tests ─────────────────────────────────
-
-    #[test]
-    fn filter_pushdown_single_table_predicate() {
-        // WHERE a.age > 30 should be pushed below Expand to sit on top of ScanNode(a).
-        let catalog = test_catalog();
-        let plan = plan_and_optimize(
-            &catalog,
-            "MATCH (a:Person)-[r:KNOWS]->(b:Person) WHERE a.age > 30 RETURN a.name, b.name",
-        );
-        // Expected structure: Projection(Expand(Filter(ScanNode(a)), b))
-        // The Filter(a.age > 30) should be between ScanNode and Expand.
-        if let LogicalOperator::Projection { input, .. } = &plan {
-            if let LogicalOperator::Expand { input: expand_in, .. } = input.as_ref() {
-                assert!(
-                    matches!(expand_in.as_ref(), LogicalOperator::Filter { .. }),
-                    "expected Filter below Expand, got {:?}",
-                    expand_in
-                );
-                if let LogicalOperator::Filter { input: filter_in, .. } = expand_in.as_ref() {
-                    assert!(
-                        matches!(filter_in.as_ref(), LogicalOperator::ScanNode { .. }),
-                        "expected ScanNode below pushed Filter, got {:?}",
-                        filter_in
-                    );
-                }
-            } else {
-                panic!("expected Expand under Projection, got {:?}", input);
-            }
-        } else {
-            panic!("expected Projection at top, got {:?}", plan);
-        }
-    }
-
-    #[test]
-    fn filter_pushdown_cross_table_stays() {
-        // a.id = b.id references both a and b — cannot push below Expand.
-        let catalog = test_catalog();
-        let plan = plan_and_optimize(
-            &catalog,
-            "MATCH (a:Person)-[r:KNOWS]->(b:Person) WHERE a.id = b.id RETURN a, b",
-        );
-        // Filter should stay on top of Expand.
-        if let LogicalOperator::Projection { input, .. } = &plan {
-            assert!(
-                matches!(input.as_ref(), LogicalOperator::Filter { .. }),
-                "cross-table predicate should stay above Expand, got {:?}",
-                input
-            );
-        } else {
-            panic!("expected Projection at top, got {:?}", plan);
-        }
-    }
-
-    #[test]
-    fn filter_pushdown_mixed_conjuncts() {
-        // a.age > 30 AND a.id = b.id — only a.age > 30 is pushable.
-        let catalog = test_catalog();
-        let plan = plan_and_optimize(
-            &catalog,
-            "MATCH (a:Person)-[r:KNOWS]->(b:Person) WHERE a.age > 30 AND a.id = b.id RETURN a, b",
-        );
-        // Expected: Projection(Filter(a.id=b.id, Expand(Filter(a.age>30, ScanNode(a)))))
-        if let LogicalOperator::Projection { input, .. } = &plan {
-            if let LogicalOperator::Filter { input: join_filter_in, .. } = input.as_ref() {
-                if let LogicalOperator::Expand { input: expand_in, .. } = join_filter_in.as_ref() {
-                    assert!(
-                        matches!(expand_in.as_ref(), LogicalOperator::Filter { .. }),
-                        "single-table predicate should be pushed below Expand, got {:?}",
-                        expand_in
-                    );
-                } else {
-                    panic!(
-                        "expected Expand below cross-table filter, got {:?}",
-                        join_filter_in
-                    );
-                }
-            } else {
-                panic!("expected Filter (cross-table) under Projection, got {:?}", input);
-            }
-        } else {
-            panic!("expected Projection at top, got {:?}", plan);
-        }
-    }
-
-    #[test]
-    fn filter_pushdown_no_filter() {
-        // No WHERE clause — plan should be unchanged.
-        let catalog = test_catalog();
-        let plan = plan_and_optimize(
-            &catalog,
-            "MATCH (a:Person)-[r:KNOWS]->(b:Person) RETURN a, b",
-        );
-        if let LogicalOperator::Projection { input, .. } = &plan {
-            assert!(
-                matches!(input.as_ref(), LogicalOperator::Expand { .. }),
-                "no filter to push, Expand should be directly under Projection"
-            );
-        } else {
-            panic!("expected Projection at top");
-        }
-    }
-
-    // ── Projection push-down tests ─────────────────────────────
-
-    #[test]
-    fn projection_pushdown_collects_columns() {
-        let catalog = test_catalog();
-        let plan = plan_and_optimize(&catalog, "MATCH (n:Person) RETURN n.name");
-        // The plan should still be valid after optimization.
-        assert!(matches!(plan, LogicalOperator::Projection { .. }));
-    }
-
-    // ── Helper tests ───────────────────────────────────────────
-
-    #[test]
-    fn split_and_combine_conjuncts() {
-        let expr = Expr::BinaryOp {
-            left: Box::new(Expr::BinaryOp {
-                left: Box::new(Expr::IntLit(1)),
-                op: BinOp::And,
-                right: Box::new(Expr::IntLit(2)),
-            }),
-            op: BinOp::And,
-            right: Box::new(Expr::IntLit(3)),
-        };
-        let parts = split_conjuncts(expr);
-        assert_eq!(parts.len(), 3);
-        let combined = combine_conjuncts(parts).unwrap();
-        // Should be AND tree
-        assert!(matches!(combined, Expr::BinaryOp { op: BinOp::And, .. }));
-    }
-
-    #[test]
-    fn referenced_aliases_property() {
-        let expr = Expr::Property(Box::new(Expr::Ident("a".into())), "age".into());
-        let aliases = referenced_aliases(&expr);
-        assert_eq!(aliases, vec!["a".to_string()]);
-    }
-
-    #[test]
-    fn referenced_aliases_binary_cross() {
-        let expr = Expr::BinaryOp {
-            left: Box::new(Expr::Property(
-                Box::new(Expr::Ident("a".into())),
-                "id".into(),
-            )),
-            op: BinOp::Eq,
-            right: Box::new(Expr::Property(
-                Box::new(Expr::Ident("b".into())),
-                "id".into(),
-            )),
-        };
-        let aliases = referenced_aliases(&expr);
-        assert_eq!(aliases, vec!["a".to_string(), "b".to_string()]);
-    }
-
-    #[test]
-    fn collect_aliases_from_expand() {
-        let plan = LogicalOperator::Expand {
-            input: Box::new(LogicalOperator::ScanNode {
-                table_name: "Person".into(),
-                table_id: 0,
-                columns: vec![],
-                alias: "a".into(),
-            }),
-            rel_table_name: "KNOWS".into(),
-            rel_table_id: 1,
-            direction: crate::parser::ast::Direction::Right,
-            src_alias: "a".into(),
-            dst_alias: "b".into(),
-            rel_alias: Some("r".into()),
-            dst_table_name: Some("Person".into()),
-            dst_table_id: Some(0),
-            optional: false,
-        };
-        let aliases = collect_plan_aliases(&plan);
-        assert!(aliases.contains(&"a".to_string()));
-        assert!(aliases.contains(&"b".to_string()));
-        assert!(aliases.contains(&"r".to_string()));
-    }
-}
