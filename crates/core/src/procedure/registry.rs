@@ -18,6 +18,7 @@ impl ProcedureRegistry {
         };
         // Register built-in procedures
         reg.register(Box::new(DbmsTables));
+        reg.register(Box::new(super::graph_algo::DegreeCentrality));
         reg
     }
 

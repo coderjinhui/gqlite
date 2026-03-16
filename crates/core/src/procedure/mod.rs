@@ -2,6 +2,7 @@
 //!
 //! Provides a trait for built-in procedures and a registry for managing them.
 
+pub mod graph_algo;
 pub mod registry;
 
 use crate::error::GqliteError;
