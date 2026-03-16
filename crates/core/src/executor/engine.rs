@@ -1190,9 +1190,9 @@ impl Engine {
         path_alias: &str,
         dst_table_id: &Option<u32>,
         max_hops: u32,
-        _all_paths: bool,
+        all_paths: bool,
     ) -> Result<Intermediate, GqliteError> {
-        use std::collections::{HashMap, VecDeque};
+        use std::collections::{HashMap, HashSet, VecDeque};
 
         let storage = db.storage.read().unwrap();
 
@@ -1257,65 +1257,146 @@ impl Engine {
                 continue;
             }
 
-            // BFS from src_id to dst_id with parent tracking
-            let mut frontier: VecDeque<u64> = VecDeque::new();
-            let mut parent: HashMap<u64, u64> = HashMap::new();
-            frontier.push_back(src_id.offset);
-            parent.insert(src_id.offset, u64::MAX); // sentinel for root
-            let mut found = false;
-            let mut depth: u32 = 0;
+            let src_table_id = dst_tid.unwrap_or(src_id.table_id);
 
-            'bfs: while !frontier.is_empty() && depth < max_hops {
-                let level_size = frontier.len();
-                depth += 1;
+            if all_paths {
+                // allShortestPaths: BFS with multi-parent tracking
+                let mut frontier: VecDeque<u64> = VecDeque::new();
+                // Each node can have multiple parents (discovered at the same BFS depth)
+                let mut parents: HashMap<u64, Vec<u64>> = HashMap::new();
+                // Track which nodes have been visited (finalized in previous depths)
+                let mut visited: HashSet<u64> = HashSet::new();
+                frontier.push_back(src_id.offset);
+                visited.insert(src_id.offset);
+                let mut found = false;
+                let mut depth: u32 = 0;
 
-                for _ in 0..level_size {
-                    let current = frontier.pop_front().unwrap();
+                while !frontier.is_empty() && depth < max_hops {
+                    let level_size = frontier.len();
+                    depth += 1;
 
-                    let neighbors = match direction {
-                        Direction::Right => rel_table.get_rels_from(current),
-                        Direction::Left => rel_table.get_rels_to(current),
-                        Direction::Both => {
-                            let mut all = rel_table.get_rels_from(current);
-                            all.extend(rel_table.get_rels_to(current));
-                            all
+                    // Nodes discovered at this depth level (not yet in visited)
+                    let mut discovered_this_level: HashSet<u64> = HashSet::new();
+
+                    for _ in 0..level_size {
+                        let current = frontier.pop_front().unwrap();
+
+                        let neighbors = match direction {
+                            Direction::Right => rel_table.get_rels_from(current),
+                            Direction::Left => rel_table.get_rels_to(current),
+                            Direction::Both => {
+                                let mut all = rel_table.get_rels_from(current);
+                                all.extend(rel_table.get_rels_to(current));
+                                all
+                            }
+                        };
+
+                        for (neighbor_offset, _rel_id) in &neighbors {
+                            // Skip nodes finalized in earlier depths
+                            if visited.contains(neighbor_offset) {
+                                continue;
+                            }
+                            // Add current as a parent of neighbor (may add multiple parents)
+                            parents
+                                .entry(*neighbor_offset)
+                                .or_insert_with(Vec::new)
+                                .push(current);
+
+                            if *neighbor_offset == dst_id.offset {
+                                found = true;
+                            }
+
+                            // Only add to frontier once per depth level
+                            if discovered_this_level.insert(*neighbor_offset) {
+                                frontier.push_back(*neighbor_offset);
+                            }
                         }
-                    };
+                    }
 
-                    for (neighbor_offset, _rel_id) in &neighbors {
-                        if parent.contains_key(neighbor_offset) {
-                            continue; // already visited
-                        }
-                        parent.insert(*neighbor_offset, current);
+                    // Move all discovered nodes into visited for the next level
+                    visited.extend(&discovered_this_level);
 
-                        if *neighbor_offset == dst_id.offset {
-                            found = true;
-                            break 'bfs;
-                        }
-
-                        frontier.push_back(*neighbor_offset);
+                    // If target found at this depth, stop BFS (all shortest paths are this length)
+                    if found {
+                        break;
                     }
                 }
-            }
 
-            if found {
-                // Reconstruct path by backtracking through parent pointers
-                let src_table_id = dst_tid.unwrap_or(src_id.table_id);
-                let mut path_nodes: Vec<Value> = Vec::new();
-                let mut current = dst_id.offset;
-                while current != u64::MAX {
-                    path_nodes.push(Value::InternalId(InternalId::new(
-                        src_table_id,
-                        current,
-                    )));
-                    current = *parent.get(&current).unwrap_or(&u64::MAX);
+                if found {
+                    // Reconstruct ALL shortest paths via recursive backtracking
+                    let all_node_paths =
+                        Self::reconstruct_all_paths(&parents, src_id.offset, dst_id.offset);
+                    for node_path in all_node_paths {
+                        let path_nodes: Vec<Value> = node_path
+                            .iter()
+                            .map(|&off| Value::InternalId(InternalId::new(src_table_id, off)))
+                            .collect();
+                        let path_value = Value::List(path_nodes);
+                        let mut new_row = row.clone();
+                        new_row.push(path_value);
+                        out_rows.push(new_row);
+                    }
                 }
-                path_nodes.reverse();
+            } else {
+                // shortestPath: BFS with single parent tracking (original behavior)
+                let mut frontier: VecDeque<u64> = VecDeque::new();
+                let mut parent: HashMap<u64, u64> = HashMap::new();
+                frontier.push_back(src_id.offset);
+                parent.insert(src_id.offset, u64::MAX); // sentinel for root
+                let mut found = false;
+                let mut depth: u32 = 0;
 
-                let path_value = Value::List(path_nodes);
-                let mut new_row = row.clone();
-                new_row.push(path_value);
-                out_rows.push(new_row);
+                'bfs: while !frontier.is_empty() && depth < max_hops {
+                    let level_size = frontier.len();
+                    depth += 1;
+
+                    for _ in 0..level_size {
+                        let current = frontier.pop_front().unwrap();
+
+                        let neighbors = match direction {
+                            Direction::Right => rel_table.get_rels_from(current),
+                            Direction::Left => rel_table.get_rels_to(current),
+                            Direction::Both => {
+                                let mut all = rel_table.get_rels_from(current);
+                                all.extend(rel_table.get_rels_to(current));
+                                all
+                            }
+                        };
+
+                        for (neighbor_offset, _rel_id) in &neighbors {
+                            if parent.contains_key(neighbor_offset) {
+                                continue; // already visited
+                            }
+                            parent.insert(*neighbor_offset, current);
+
+                            if *neighbor_offset == dst_id.offset {
+                                found = true;
+                                break 'bfs;
+                            }
+
+                            frontier.push_back(*neighbor_offset);
+                        }
+                    }
+                }
+
+                if found {
+                    // Reconstruct path by backtracking through parent pointers
+                    let mut path_nodes: Vec<Value> = Vec::new();
+                    let mut current = dst_id.offset;
+                    while current != u64::MAX {
+                        path_nodes.push(Value::InternalId(InternalId::new(
+                            src_table_id,
+                            current,
+                        )));
+                        current = *parent.get(&current).unwrap_or(&u64::MAX);
+                    }
+                    path_nodes.reverse();
+
+                    let path_value = Value::List(path_nodes);
+                    let mut new_row = row.clone();
+                    new_row.push(path_value);
+                    out_rows.push(new_row);
+                }
             }
             // If no path found, skip this row (do not emit)
         }
@@ -1325,6 +1406,43 @@ impl Engine {
             types: out_types,
             rows: out_rows,
         })
+    }
+
+    /// Reconstruct all shortest paths from `src` to `dst` using the multi-parent map.
+    /// Returns a Vec of paths, where each path is a Vec of node offsets from src to dst.
+    fn reconstruct_all_paths(
+        parents: &std::collections::HashMap<u64, Vec<u64>>,
+        src: u64,
+        dst: u64,
+    ) -> Vec<Vec<u64>> {
+        let mut result = Vec::new();
+        let mut current_path = vec![dst];
+        Self::backtrack_paths(parents, src, dst, &mut current_path, &mut result);
+        result
+    }
+
+    /// Recursive backtracking: enumerate all parent chains from `node` back to `src`.
+    fn backtrack_paths(
+        parents: &std::collections::HashMap<u64, Vec<u64>>,
+        src: u64,
+        node: u64,
+        current_path: &mut Vec<u64>,
+        result: &mut Vec<Vec<u64>>,
+    ) {
+        if node == src {
+            // We've traced back to the source — emit this path (reversed)
+            let mut path = current_path.clone();
+            path.reverse();
+            result.push(path);
+            return;
+        }
+        if let Some(node_parents) = parents.get(&node) {
+            for &p in node_parents {
+                current_path.push(p);
+                Self::backtrack_paths(parents, src, p, current_path, result);
+                current_path.pop();
+            }
+        }
     }
 
     // ── Cross Join (Task 026 — simplified) ──────────────────────
