@@ -1,0 +1,13 @@
+[package]
+name = "gqlite-parser"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Cypher query language parser for gqlite"
+
+[dependencies]
+logos = { workspace = true }
+thiserror = { workspace = true }
+serde = { workspace = true }

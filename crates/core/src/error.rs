@@ -21,3 +21,9 @@ pub enum GqliteError {
     #[error("{0}")]
     Other(String),
 }
+
+impl From<gqlite_parser::ParseError> for GqliteError {
+    fn from(e: gqlite_parser::ParseError) -> Self {
+        GqliteError::Parse(e.to_string())
+    }
+}

@@ -1,6 +1,6 @@
 //! Abstract syntax tree nodes for the gqlite Cypher subset.
 
-use crate::types::data_type::DataType;
+use crate::data_type::DataType;
 
 // ── Top-level Statement ─────────────────────────────────────────
 
@@ -90,7 +90,7 @@ pub struct RelPattern {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Direction {
-    Right,  // -[]->(
+    Right,  // -[]->
     Left,   // <-[]-
     Both,   // -[]-
 }

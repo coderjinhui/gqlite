@@ -7,12 +7,12 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
+gqlite-parser = { workspace = true }
 thiserror = { workspace = true }
 serde = { workspace = true }
 bincode = { workspace = true }
 uuid = { workspace = true }
 bitvec = { workspace = true }
-logos = { workspace = true }
 ahash = { workspace = true }
 parking_lot = { workspace = true }
 crc32fast = { workspace = true }

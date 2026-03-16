@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/core", "crates/cli"]
+members = ["crates/core", "crates/cli", "crates/parser"]
 resolver = "2"
 
 [workspace.package]
@@ -20,3 +20,4 @@ parking_lot = "0.12"
 crc32fast = "1"
 rayon = "1"
 gqlite-core = { path = "crates/core" }
+gqlite-parser = { path = "crates/parser" }

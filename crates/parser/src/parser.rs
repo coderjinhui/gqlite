@@ -1,5 +1,5 @@
-use crate::error::GqliteError;
-use crate::types::data_type::DataType;
+use crate::ParseError;
+use crate::data_type::DataType;
 
 use super::ast::*;
 use super::token::Token;
@@ -16,15 +16,15 @@ impl Parser {
     }
 
     /// Parse from a raw query string (tokenize + parse).
-    pub fn parse_query(input: &str) -> Result<Statement, GqliteError> {
+    pub fn parse_query(input: &str) -> Result<Statement, ParseError> {
         let tokens = super::token::tokenize(input)
-            .map_err(|e| GqliteError::Parse(e))?;
+            .map_err(|e| ParseError::Lex(e))?;
         let mut parser = Parser::new(tokens);
         parser.parse()
     }
 
     /// Parse the token stream into a Statement.
-    pub fn parse(&mut self) -> Result<Statement, GqliteError> {
+    pub fn parse(&mut self) -> Result<Statement, ParseError> {
         // Skip leading semicolons
         while self.check(&Token::Semicolon) {
             self.advance();
@@ -60,7 +60,7 @@ impl Parser {
         Ok(stmt)
     }
 
-    fn parse_union(&mut self, left: Statement) -> Result<Statement, GqliteError> {
+    fn parse_union(&mut self, left: Statement) -> Result<Statement, ParseError> {
         self.expect(&Token::Union)?;
         let all = self.check(&Token::All);
         if all {
@@ -76,7 +76,7 @@ impl Parser {
 
     // ── Query Statement ─────────────────────────────────────────
 
-    fn parse_query_statement(&mut self) -> Result<Statement, GqliteError> {
+    fn parse_query_statement(&mut self) -> Result<Statement, ParseError> {
         let mut clauses = Vec::new();
 
         loop {
@@ -106,7 +106,7 @@ impl Parser {
 
     // ── MATCH ───────────────────────────────────────────────────
 
-    fn parse_match_clause(&mut self) -> Result<Clause, GqliteError> {
+    fn parse_match_clause(&mut self) -> Result<Clause, ParseError> {
         let optional = self.check(&Token::Optional);
         if optional {
             self.advance();
@@ -117,7 +117,7 @@ impl Parser {
         Ok(Clause::Match(MatchClause { optional, pattern }))
     }
 
-    fn parse_graph_pattern(&mut self) -> Result<GraphPattern, GqliteError> {
+    fn parse_graph_pattern(&mut self) -> Result<GraphPattern, ParseError> {
         let mut paths = vec![self.parse_path_pattern()?];
         while self.check(&Token::Comma) {
             self.advance();
@@ -126,7 +126,7 @@ impl Parser {
         Ok(GraphPattern { paths })
     }
 
-    fn parse_path_pattern(&mut self) -> Result<PathPattern, GqliteError> {
+    fn parse_path_pattern(&mut self) -> Result<PathPattern, ParseError> {
         let mut elements = vec![PatternElement::Node(self.parse_node_pattern()?)];
 
         // rel + node pairs
@@ -138,7 +138,7 @@ impl Parser {
         Ok(PathPattern { elements })
     }
 
-    fn parse_node_pattern(&mut self) -> Result<NodePattern, GqliteError> {
+    fn parse_node_pattern(&mut self) -> Result<NodePattern, ParseError> {
         self.expect(&Token::LParen)?;
         let mut alias = None;
         let mut label = None;
@@ -172,7 +172,7 @@ impl Parser {
         matches!(self.peek(), Token::Dash | Token::LeftArrow)
     }
 
-    fn parse_rel_pattern(&mut self) -> Result<RelPattern, GqliteError> {
+    fn parse_rel_pattern(&mut self) -> Result<RelPattern, ParseError> {
         let direction;
         let alias;
         let label;
@@ -222,7 +222,7 @@ impl Parser {
 
     fn parse_rel_inner(
         &mut self,
-    ) -> Result<(Option<String>, Option<String>, Vec<(String, Expr)>, Option<(u32, u32)>), GqliteError> {
+    ) -> Result<(Option<String>, Option<String>, Vec<(String, Expr)>, Option<(u32, u32)>), ParseError> {
         let mut alias = None;
         let mut label = None;
         let mut properties = Vec::new();
@@ -266,7 +266,7 @@ impl Parser {
         Ok((alias, label, properties, var_length))
     }
 
-    fn parse_property_map(&mut self) -> Result<Vec<(String, Expr)>, GqliteError> {
+    fn parse_property_map(&mut self) -> Result<Vec<(String, Expr)>, ParseError> {
         self.expect(&Token::LBrace)?;
         let mut props = Vec::new();
         if !self.check(&Token::RBrace) {
@@ -289,7 +289,7 @@ impl Parser {
 
     // ── WHERE ───────────────────────────────────────────────────
 
-    fn parse_where_clause(&mut self) -> Result<Clause, GqliteError> {
+    fn parse_where_clause(&mut self) -> Result<Clause, ParseError> {
         self.expect(&Token::Where)?;
         let expr = self.parse_expr()?;
         Ok(Clause::Where(WhereClause { expr }))
@@ -297,7 +297,7 @@ impl Parser {
 
     // ── RETURN ──────────────────────────────────────────────────
 
-    fn parse_return_clause(&mut self) -> Result<Clause, GqliteError> {
+    fn parse_return_clause(&mut self) -> Result<Clause, ParseError> {
         self.expect(&Token::Return)?;
 
         let distinct = self.check(&Token::Distinct);
@@ -323,7 +323,7 @@ impl Parser {
         }))
     }
 
-    fn parse_return_items(&mut self) -> Result<Vec<ReturnItem>, GqliteError> {
+    fn parse_return_items(&mut self) -> Result<Vec<ReturnItem>, ParseError> {
         let mut items = vec![self.parse_return_item()?];
         while self.check(&Token::Comma) {
             self.advance();
@@ -332,7 +332,7 @@ impl Parser {
         Ok(items)
     }
 
-    fn parse_return_item(&mut self) -> Result<ReturnItem, GqliteError> {
+    fn parse_return_item(&mut self) -> Result<ReturnItem, ParseError> {
         let expr = self.parse_expr()?;
         let alias = if self.check(&Token::As) {
             self.advance();
@@ -345,7 +345,7 @@ impl Parser {
 
     // ── WITH ────────────────────────────────────────────────────
 
-    fn parse_with_clause(&mut self) -> Result<Clause, GqliteError> {
+    fn parse_with_clause(&mut self) -> Result<Clause, ParseError> {
         self.expect(&Token::With)?;
         let items = self.parse_return_items()?;
         Ok(Clause::With(WithClause { items }))
@@ -353,7 +353,7 @@ impl Parser {
 
     // ── ORDER BY ────────────────────────────────────────────────
 
-    fn parse_order_by_clause(&mut self) -> Result<Clause, GqliteError> {
+    fn parse_order_by_clause(&mut self) -> Result<Clause, ParseError> {
         self.expect(&Token::Order)?;
         self.expect(&Token::By)?;
 
@@ -365,7 +365,7 @@ impl Parser {
         Ok(Clause::OrderBy(OrderByClause { items }))
     }
 
-    fn parse_order_by_item(&mut self) -> Result<OrderByItem, GqliteError> {
+    fn parse_order_by_item(&mut self) -> Result<OrderByItem, ParseError> {
         let expr = self.parse_expr()?;
         let descending = if self.check(&Token::Desc) {
             self.advance();
@@ -381,13 +381,13 @@ impl Parser {
 
     // ── LIMIT / SKIP ────────────────────────────────────────────
 
-    fn parse_limit_clause(&mut self) -> Result<Clause, GqliteError> {
+    fn parse_limit_clause(&mut self) -> Result<Clause, ParseError> {
         self.expect(&Token::Limit)?;
         let count = self.parse_expr()?;
         Ok(Clause::Limit(LimitClause { count }))
     }
 
-    fn parse_skip_clause(&mut self) -> Result<Clause, GqliteError> {
+    fn parse_skip_clause(&mut self) -> Result<Clause, ParseError> {
         self.expect(&Token::Skip)?;
         let count = self.parse_expr()?;
         Ok(Clause::Skip(SkipClause { count }))
@@ -395,7 +395,7 @@ impl Parser {
 
     // ── CREATE (DML) ────────────────────────────────────────────
 
-    fn parse_create_clause(&mut self) -> Result<Clause, GqliteError> {
+    fn parse_create_clause(&mut self) -> Result<Clause, ParseError> {
         self.expect(&Token::Create)?;
         let pattern = self.parse_graph_pattern()?;
         Ok(Clause::Create(CreateClause { pattern }))
@@ -403,7 +403,7 @@ impl Parser {
 
     // ── SET ─────────────────────────────────────────────────────
 
-    fn parse_set_clause(&mut self) -> Result<Clause, GqliteError> {
+    fn parse_set_clause(&mut self) -> Result<Clause, ParseError> {
         self.expect(&Token::Set)?;
         let mut items = vec![self.parse_set_item()?];
         while self.check(&Token::Comma) {
@@ -413,7 +413,7 @@ impl Parser {
         Ok(Clause::Set(SetClause { items }))
     }
 
-    fn parse_set_item(&mut self) -> Result<SetItem, GqliteError> {
+    fn parse_set_item(&mut self) -> Result<SetItem, ParseError> {
         let variable = self.expect_ident()?;
         self.expect(&Token::Dot)?;
         let field = self.expect_ident()?;
@@ -427,7 +427,7 @@ impl Parser {
 
     // ── DELETE ───────────────────────────────────────────────────
 
-    fn parse_delete_clause(&mut self) -> Result<Clause, GqliteError> {
+    fn parse_delete_clause(&mut self) -> Result<Clause, ParseError> {
         let detach = self.check(&Token::Detach);
         if detach {
             self.advance();
@@ -444,7 +444,7 @@ impl Parser {
 
     // ── UNWIND ──────────────────────────────────────────────────
 
-    fn parse_unwind_clause(&mut self) -> Result<Clause, GqliteError> {
+    fn parse_unwind_clause(&mut self) -> Result<Clause, ParseError> {
         self.expect(&Token::Unwind)?;
         let expr = self.parse_expr()?;
         self.expect(&Token::As)?;
@@ -454,7 +454,7 @@ impl Parser {
 
     // ── MERGE ───────────────────────────────────────────────────
 
-    fn parse_merge_clause(&mut self) -> Result<Clause, GqliteError> {
+    fn parse_merge_clause(&mut self) -> Result<Clause, ParseError> {
         self.expect(&Token::Merge)?;
         let pattern = self.parse_graph_pattern()?;
 
@@ -496,7 +496,7 @@ impl Parser {
 
     // ── DDL ─────────────────────────────────────────────────────
 
-    fn parse_create_node_table(&mut self) -> Result<Statement, GqliteError> {
+    fn parse_create_node_table(&mut self) -> Result<Statement, ParseError> {
         self.expect(&Token::Create)?;
         self.expect(&Token::Node)?;
         self.expect(&Token::Table)?;
@@ -544,7 +544,7 @@ impl Parser {
         }))
     }
 
-    fn parse_create_rel_table(&mut self) -> Result<Statement, GqliteError> {
+    fn parse_create_rel_table(&mut self) -> Result<Statement, ParseError> {
         self.expect(&Token::Create)?;
         self.expect(&Token::Rel)?;
         self.expect(&Token::Table)?;
@@ -581,14 +581,14 @@ impl Parser {
         }))
     }
 
-    fn parse_drop_table(&mut self) -> Result<Statement, GqliteError> {
+    fn parse_drop_table(&mut self) -> Result<Statement, ParseError> {
         self.expect(&Token::Drop)?;
         self.expect(&Token::Table)?;
         let name = self.expect_ident()?;
         Ok(Statement::DropTable(DropTableStmt { name }))
     }
 
-    fn parse_alter_table(&mut self) -> Result<Statement, GqliteError> {
+    fn parse_alter_table(&mut self) -> Result<Statement, ParseError> {
         self.expect(&Token::Alter)?;
         self.expect(&Token::Table)?;
         let table_name = self.expect_ident()?;
@@ -647,7 +647,7 @@ impl Parser {
         }))
     }
 
-    fn parse_copy(&mut self) -> Result<Statement, GqliteError> {
+    fn parse_copy(&mut self) -> Result<Statement, ParseError> {
         self.expect(&Token::Copy)?;
 
         // Check if it's COPY ... TO (export) or COPY ... FROM (import)
@@ -696,7 +696,7 @@ impl Parser {
     }
 
     /// Parse optional WITH (HEADER, DELIMITER 'x') options.
-    fn parse_copy_options(&mut self) -> Result<(bool, char), GqliteError> {
+    fn parse_copy_options(&mut self) -> Result<(bool, char), ParseError> {
         let mut header = true;
         let mut delimiter = ',';
 
@@ -746,7 +746,7 @@ impl Parser {
         Ok((header, delimiter))
     }
 
-    fn parse_data_type(&mut self) -> Result<DataType, GqliteError> {
+    fn parse_data_type(&mut self) -> Result<DataType, ParseError> {
         match self.peek() {
             Token::TypeInt64 => {
                 self.advance();
@@ -774,11 +774,11 @@ impl Parser {
 
     // ── Expression Parsing (Pratt-style) ────────────────────────
 
-    pub fn parse_expr(&mut self) -> Result<Expr, GqliteError> {
+    pub fn parse_expr(&mut self) -> Result<Expr, ParseError> {
         self.parse_or_expr()
     }
 
-    fn parse_or_expr(&mut self) -> Result<Expr, GqliteError> {
+    fn parse_or_expr(&mut self) -> Result<Expr, ParseError> {
         let mut left = self.parse_and_expr()?;
         while self.check(&Token::Or) {
             self.advance();
@@ -792,7 +792,7 @@ impl Parser {
         Ok(left)
     }
 
-    fn parse_and_expr(&mut self) -> Result<Expr, GqliteError> {
+    fn parse_and_expr(&mut self) -> Result<Expr, ParseError> {
         let mut left = self.parse_not_expr()?;
         while self.check(&Token::And) {
             self.advance();
@@ -806,7 +806,7 @@ impl Parser {
         Ok(left)
     }
 
-    fn parse_not_expr(&mut self) -> Result<Expr, GqliteError> {
+    fn parse_not_expr(&mut self) -> Result<Expr, ParseError> {
         if self.check(&Token::Not) {
             self.advance();
             let expr = self.parse_comparison()?;
@@ -819,7 +819,7 @@ impl Parser {
         }
     }
 
-    fn parse_comparison(&mut self) -> Result<Expr, GqliteError> {
+    fn parse_comparison(&mut self) -> Result<Expr, ParseError> {
         let left = self.parse_addition()?;
 
         // IS [NOT] NULL
@@ -859,7 +859,7 @@ impl Parser {
         }
     }
 
-    fn parse_addition(&mut self) -> Result<Expr, GqliteError> {
+    fn parse_addition(&mut self) -> Result<Expr, ParseError> {
         let mut left = self.parse_multiplication()?;
         loop {
             let op = match self.peek() {
@@ -878,7 +878,7 @@ impl Parser {
         Ok(left)
     }
 
-    fn parse_multiplication(&mut self) -> Result<Expr, GqliteError> {
+    fn parse_multiplication(&mut self) -> Result<Expr, ParseError> {
         let mut left = self.parse_unary()?;
         loop {
             let op = match self.peek() {
@@ -898,7 +898,7 @@ impl Parser {
         Ok(left)
     }
 
-    fn parse_unary(&mut self) -> Result<Expr, GqliteError> {
+    fn parse_unary(&mut self) -> Result<Expr, ParseError> {
         if self.check(&Token::Dash) {
             self.advance();
             let expr = self.parse_primary()?;
@@ -911,7 +911,7 @@ impl Parser {
         }
     }
 
-    fn parse_primary(&mut self) -> Result<Expr, GqliteError> {
+    fn parse_primary(&mut self) -> Result<Expr, ParseError> {
         match self.peek().clone() {
             Token::IntLit(v) => {
                 self.advance();
@@ -983,7 +983,7 @@ impl Parser {
         }
     }
 
-    fn parse_list_literal(&mut self) -> Result<Expr, GqliteError> {
+    fn parse_list_literal(&mut self) -> Result<Expr, ParseError> {
         self.expect(&Token::LBracket)?;
         let mut items = Vec::new();
         if !self.check(&Token::RBracket) {
@@ -997,7 +997,7 @@ impl Parser {
         Ok(Expr::ListLit(items))
     }
 
-    fn parse_function_call(&mut self, name: String) -> Result<Expr, GqliteError> {
+    fn parse_function_call(&mut self, name: String) -> Result<Expr, ParseError> {
         self.expect(&Token::LParen)?;
 
         // count(*) special case
@@ -1059,7 +1059,7 @@ impl Parser {
         std::mem::discriminant(self.peek()) == std::mem::discriminant(expected)
     }
 
-    fn expect(&mut self, expected: &Token) -> Result<(), GqliteError> {
+    fn expect(&mut self, expected: &Token) -> Result<(), ParseError> {
         if self.check(expected) {
             self.advance();
             Ok(())
@@ -1068,7 +1068,7 @@ impl Parser {
         }
     }
 
-    fn expect_ident(&mut self) -> Result<String, GqliteError> {
+    fn expect_ident(&mut self) -> Result<String, ParseError> {
         match self.peek().clone() {
             Token::Ident(name) => {
                 self.advance();
@@ -1078,7 +1078,7 @@ impl Parser {
         }
     }
 
-    fn expect_string_lit(&mut self) -> Result<String, GqliteError> {
+    fn expect_string_lit(&mut self) -> Result<String, ParseError> {
         match self.peek().clone() {
             Token::StringLit(s) => {
                 self.advance();
@@ -1089,7 +1089,7 @@ impl Parser {
     }
 
     /// Parse a query body (clauses only, no Statement wrapper).
-    fn parse_query_body(&mut self) -> Result<QueryStatement, GqliteError> {
+    fn parse_query_body(&mut self) -> Result<QueryStatement, ParseError> {
         let mut clauses = Vec::new();
         loop {
             match self.peek() {
@@ -1114,8 +1114,8 @@ impl Parser {
         Ok(QueryStatement { clauses })
     }
 
-    fn error(&self, msg: &str) -> GqliteError {
-        GqliteError::Parse(format!("at position {}: {}", self.pos, msg))
+    fn error(&self, msg: &str) -> ParseError {
+        ParseError::Parse(format!("at position {}: {}", self.pos, msg))
     }
 }
 
