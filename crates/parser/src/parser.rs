@@ -31,6 +31,7 @@ impl Parser {
         }
 
         let stmt = match self.peek() {
+            Token::Call => self.parse_call_statement(),
             Token::Create => {
                 // Peek ahead: CREATE NODE TABLE / CREATE REL TABLE / CREATE (pattern)
                 if self.peek_at(1) == &Token::Node && self.peek_at(2) == &Token::Table {
@@ -72,6 +73,41 @@ impl Parser {
             right: Box::new(right),
             all,
         })
+    }
+
+    // ── CALL Statement ─────────────────────────────────────────
+
+    fn parse_call_statement(&mut self) -> Result<Statement, ParseError> {
+        self.expect(&Token::Call)?;
+        // Procedure name (may have dots: dbms.tables)
+        let mut name = self.expect_ident()?;
+        while self.check(&Token::Dot) {
+            self.advance();
+            let part = self.expect_ident()?;
+            name = format!("{}.{}", name, part);
+        }
+        // Arguments
+        self.expect(&Token::LParen)?;
+        let mut args = Vec::new();
+        if !self.check(&Token::RParen) {
+            args.push(self.parse_expr()?);
+            while self.check(&Token::Comma) {
+                self.advance();
+                args.push(self.parse_expr()?);
+            }
+        }
+        self.expect(&Token::RParen)?;
+        // YIELD clause (optional)
+        let mut yields = Vec::new();
+        if self.check(&Token::Yield) {
+            self.advance();
+            yields.push(self.expect_ident()?);
+            while self.check(&Token::Comma) {
+                self.advance();
+                yields.push(self.expect_ident()?);
+            }
+        }
+        Ok(Statement::Call { procedure: name, args, yields })
     }
 
     // ── Query Statement ─────────────────────────────────────────

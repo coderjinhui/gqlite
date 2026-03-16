@@ -12,7 +12,7 @@ fn parse_ident_or_keyword(lex: &mut logos::Lexer<Token>) -> logos::FilterResult<
         | "UNION" | "ALL" | "UNWIND" | "ON" | "BEGIN" | "COMMIT" | "ROLLBACK" | "CASE"
         | "WHEN" | "THEN" | "ELSE" | "END" | "FROM" | "TO" | "INT64" | "DOUBLE"
         | "STRING" | "BOOL" | "SERIAL" | "ALTER" | "ADD" | "RENAME" | "COLUMN"
-        | "COPY" | "HEADER" | "DELIMITER" | "CAST" => logos::FilterResult::Skip,
+        | "COPY" | "HEADER" | "DELIMITER" | "CAST" | "CALL" | "YIELD" => logos::FilterResult::Skip,
         _ => logos::FilterResult::Emit(slice.to_string()),
     }
 }
@@ -160,6 +160,10 @@ pub enum Token {
     Delimiter,
     #[regex("(?i)cast", priority = 10)]
     Cast,
+    #[regex("(?i)call", priority = 10)]
+    Call,
+    #[regex("(?i)yield", priority = 10)]
+    Yield,
 
     // Type keywords
     #[regex("(?i)int64", priority = 10)]

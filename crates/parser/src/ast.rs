@@ -18,6 +18,11 @@ pub enum Statement {
         right: Box<Statement>,
         all: bool,
     },
+    Call {
+        procedure: String,
+        args: Vec<Expr>,
+        yields: Vec<String>,
+    },
 }
 
 // ── Query Statement ─────────────────────────────────────────────

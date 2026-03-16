@@ -12,7 +12,7 @@ const DOT_COMMANDS: &[&str] = &[
 const CYPHER_KEYWORDS: &[&str] = &[
     "ADD", "ALL", "ALTER", "AND", "AS", "ASC",
     "BEGIN", "BOOL", "BY",
-    "CASE", "CAST", "COLUMN", "COMMIT", "COPY", "CREATE",
+    "CALL", "CASE", "CAST", "COLUMN", "COMMIT", "COPY", "CREATE",
     "DELETE", "DELIMITER", "DESC", "DETACH", "DISTINCT", "DOUBLE", "DROP",
     "ELSE", "END", "EXISTS",
     "FALSE", "FROM",
@@ -29,6 +29,7 @@ const CYPHER_KEYWORDS: &[&str] = &[
     "TABLE", "THEN", "TO", "TRUE",
     "UNION", "UNWIND",
     "WHEN", "WHERE", "WITH",
+    "YIELD",
 ];
 
 #[derive(Helper, Validator)]

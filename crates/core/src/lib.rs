@@ -10,6 +10,7 @@ pub mod executor;
 pub mod functions;
 pub mod parser;
 pub mod planner;
+pub mod procedure;
 pub mod storage;
 pub mod transaction;
 pub mod types;
@@ -442,8 +443,15 @@ impl Connection {
         gql: &str,
         params: HashMap<String, Value>,
     ) -> Result<QueryResult, GqliteError> {
+        use crate::parser::ast::Statement as AstStatement;
+
         // 1. Parse
         let stmt = Parser::parse_query(gql)?;
+
+        // Handle CALL procedure directly (bypasses binder/planner)
+        if let AstStatement::Call { procedure, args, yields } = &stmt {
+            return self.execute_call(procedure, args, yields, &params);
+        }
 
         // 2. Bind
         let catalog = self.db.catalog.read().unwrap();
@@ -531,6 +539,115 @@ impl Connection {
     /// Execute a query and return results (alias for execute).
     pub fn query(&self, gql: &str) -> Result<QueryResult, GqliteError> {
         self.execute(gql)
+    }
+
+    /// Execute a CALL procedure statement directly.
+    fn execute_call(
+        &self,
+        procedure_name: &str,
+        arg_exprs: &[crate::parser::ast::Expr],
+        yields: &[String],
+        params: &HashMap<String, Value>,
+    ) -> Result<QueryResult, GqliteError> {
+        // Resolve the procedure from the registry
+        let registry = procedure::registry::ProcedureRegistry::new();
+        let proc = registry
+            .get(procedure_name)
+            .ok_or_else(|| {
+                GqliteError::Execution(format!(
+                    "unknown procedure '{}'",
+                    procedure_name
+                ))
+            })?;
+
+        // Evaluate argument expressions to values
+        let args: Vec<Value> = arg_exprs
+            .iter()
+            .map(|expr| self.eval_call_arg(expr, params))
+            .collect::<Result<Vec<_>, _>>()?;
+
+        // Execute the procedure
+        let all_columns = proc.output_columns();
+        let all_rows = proc.execute(&args, &self.db)?;
+
+        // Filter columns by YIELD list (if specified)
+        if yields.is_empty() {
+            // Return all columns
+            let columns: Vec<ColumnInfo> = all_columns
+                .iter()
+                .map(|name| ColumnInfo {
+                    name: name.clone(),
+                    data_type: DataType::String,
+                })
+                .collect();
+            let rows: Vec<Row> = all_rows
+                .into_iter()
+                .map(|r| Row { values: r })
+                .collect();
+            Ok(QueryResult::new(columns, rows))
+        } else {
+            // Map YIELD column names to indices in the procedure output
+            let yield_indices: Vec<usize> = yields
+                .iter()
+                .map(|y| {
+                    all_columns
+                        .iter()
+                        .position(|c| c == y)
+                        .ok_or_else(|| {
+                            GqliteError::Execution(format!(
+                                "procedure '{}' does not output column '{}'",
+                                procedure_name, y
+                            ))
+                        })
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+
+            let columns: Vec<ColumnInfo> = yields
+                .iter()
+                .map(|name| ColumnInfo {
+                    name: name.clone(),
+                    data_type: DataType::String,
+                })
+                .collect();
+
+            let rows: Vec<Row> = all_rows
+                .into_iter()
+                .map(|row| {
+                    let values: Vec<Value> = yield_indices
+                        .iter()
+                        .map(|&idx| row[idx].clone())
+                        .collect();
+                    Row { values }
+                })
+                .collect();
+
+            Ok(QueryResult::new(columns, rows))
+        }
+    }
+
+    /// Evaluate a simple expression for CALL arguments.
+    /// Supports literals and parameter references.
+    fn eval_call_arg(
+        &self,
+        expr: &crate::parser::ast::Expr,
+        params: &HashMap<String, Value>,
+    ) -> Result<Value, GqliteError> {
+        use crate::parser::ast::Expr;
+        match expr {
+            Expr::IntLit(v) => Ok(Value::Int(*v)),
+            Expr::FloatLit(v) => Ok(Value::Float(*v)),
+            Expr::StringLit(s) => Ok(Value::String(s.clone())),
+            Expr::BoolLit(b) => Ok(Value::Bool(*b)),
+            Expr::NullLit => Ok(Value::Null),
+            Expr::Param(name) => {
+                params.get(name).cloned().ok_or_else(|| {
+                    GqliteError::Execution(format!("parameter '{}' not found", name))
+                })
+            }
+            _ => Err(GqliteError::Execution(
+                "unsupported expression in CALL arguments".into(),
+            )),
+        }
     }
 }
 

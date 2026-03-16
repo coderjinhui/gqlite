@@ -577,3 +577,59 @@ fn not_exists_subquery_parse() {
     }
 }
 
+// ── CALL procedure parsing ─────────────────────────────────
+
+#[test]
+fn call_simple_procedure() {
+    let stmt = parse("CALL dbms.tables()");
+    let Statement::Call { procedure, args, yields } = stmt else {
+        panic!("expected Call statement");
+    };
+    assert_eq!(procedure, "dbms.tables");
+    assert!(args.is_empty());
+    assert!(yields.is_empty());
+}
+
+#[test]
+fn call_with_yield() {
+    let stmt = parse("CALL dbms.tables() YIELD name, type");
+    let Statement::Call { procedure, args, yields } = stmt else {
+        panic!("expected Call statement");
+    };
+    assert_eq!(procedure, "dbms.tables");
+    assert!(args.is_empty());
+    assert_eq!(yields, vec!["name", "type"]);
+}
+
+#[test]
+fn call_with_args() {
+    let stmt = parse("CALL algo.pagerank('Person', 20)");
+    let Statement::Call { procedure, args, yields } = stmt else {
+        panic!("expected Call statement");
+    };
+    assert_eq!(procedure, "algo.pagerank");
+    assert_eq!(args.len(), 2);
+    assert!(matches!(&args[0], Expr::StringLit(s) if s == "Person"));
+    assert!(matches!(&args[1], Expr::IntLit(20)));
+    assert!(yields.is_empty());
+}
+
+#[test]
+fn call_case_insensitive() {
+    let stmt = parse("call dbms.tables() yield name");
+    let Statement::Call { procedure, yields, .. } = stmt else {
+        panic!("expected Call statement");
+    };
+    assert_eq!(procedure, "dbms.tables");
+    assert_eq!(yields, vec!["name"]);
+}
+
+#[test]
+fn call_dotted_name_three_parts() {
+    let stmt = parse("CALL a.b.c()");
+    let Statement::Call { procedure, .. } = stmt else {
+        panic!("expected Call statement");
+    };
+    assert_eq!(procedure, "a.b.c");
+}
+

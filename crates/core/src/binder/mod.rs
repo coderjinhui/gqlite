@@ -96,6 +96,13 @@ impl<'a> Binder<'a> {
                     all: *all,
                 })
             }
+            Statement::Call { .. } => {
+                // CALL statements are handled directly in Connection::execute_with_params,
+                // they should never reach the binder.
+                Err(GqliteError::Parse(
+                    "CALL statements should be handled before binding".into(),
+                ))
+            }
         }
     }
 
