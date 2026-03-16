@@ -42,6 +42,8 @@ impl Parser {
                 }
             }
             Token::Drop => self.parse_drop_table(),
+            Token::Alter => self.parse_alter_table(),
+            Token::Copy => self.parse_copy(),
             _ => self.parse_query_statement(),
         }?;
 
@@ -50,7 +52,26 @@ impl Parser {
             self.advance();
         }
 
+        // Check for UNION
+        if self.check(&Token::Union) {
+            return self.parse_union(stmt);
+        }
+
         Ok(stmt)
+    }
+
+    fn parse_union(&mut self, left: Statement) -> Result<Statement, GqliteError> {
+        self.expect(&Token::Union)?;
+        let all = self.check(&Token::All);
+        if all {
+            self.advance();
+        }
+        let right = self.parse()?;
+        Ok(Statement::Union {
+            left: Box::new(left),
+            right: Box::new(right),
+            all,
+        })
     }
 
     // ── Query Statement ─────────────────────────────────────────
@@ -70,6 +91,8 @@ impl Parser {
                 Token::Create => clauses.push(self.parse_create_clause()?),
                 Token::Set => clauses.push(self.parse_set_clause()?),
                 Token::Delete | Token::Detach => clauses.push(self.parse_delete_clause()?),
+                Token::Unwind => clauses.push(self.parse_unwind_clause()?),
+                Token::Merge => clauses.push(self.parse_merge_clause()?),
                 _ => break,
             }
         }
@@ -154,15 +177,17 @@ impl Parser {
         let alias;
         let label;
         let properties;
+        let var_length;
 
         if self.check(&Token::LeftArrow) {
             // <-[...]-
             self.advance(); // <-
             self.expect(&Token::LBracket)?;
-            let (a, l, p) = self.parse_rel_inner()?;
+            let (a, l, p, vl) = self.parse_rel_inner()?;
             alias = a;
             label = l;
             properties = p;
+            var_length = vl;
             self.expect(&Token::RBracket)?;
             self.expect(&Token::Dash)?;
             direction = Direction::Left;
@@ -170,10 +195,11 @@ impl Parser {
             // -[...]-> or -[...]-
             self.expect(&Token::Dash)?;
             self.expect(&Token::LBracket)?;
-            let (a, l, p) = self.parse_rel_inner()?;
+            let (a, l, p, vl) = self.parse_rel_inner()?;
             alias = a;
             label = l;
             properties = p;
+            var_length = vl;
             self.expect(&Token::RBracket)?;
 
             if self.check(&Token::Arrow) {
@@ -190,15 +216,17 @@ impl Parser {
             label,
             direction,
             properties,
+            var_length,
         })
     }
 
     fn parse_rel_inner(
         &mut self,
-    ) -> Result<(Option<String>, Option<String>, Vec<(String, Expr)>), GqliteError> {
+    ) -> Result<(Option<String>, Option<String>, Vec<(String, Expr)>, Option<(u32, u32)>), GqliteError> {
         let mut alias = None;
         let mut label = None;
         let mut properties = Vec::new();
+        let mut var_length = None;
 
         if let Token::Ident(_) = self.peek() {
             alias = Some(self.expect_ident()?);
@@ -207,11 +235,35 @@ impl Parser {
             self.advance();
             label = Some(self.expect_ident()?);
         }
+        // Variable-length: *  or  *min..max  or  *..max  or  *min..
+        if self.check(&Token::Star) {
+            self.advance(); // consume *
+            let mut min_hops: u32 = 1;
+            let mut max_hops: u32 = u32::MAX;
+
+            if let Token::IntLit(n) = self.peek() {
+                min_hops = *n as u32;
+                self.advance();
+            }
+            if self.check(&Token::DotDot) {
+                self.advance(); // consume ..
+                if let Token::IntLit(n) = self.peek() {
+                    max_hops = *n as u32;
+                    self.advance();
+                }
+            } else {
+                // *N means exactly N hops (no ..)
+                if min_hops != 1 || !matches!(self.peek(), Token::RBracket) {
+                    max_hops = min_hops;
+                }
+            }
+            var_length = Some((min_hops, max_hops));
+        }
         if self.check(&Token::LBrace) {
             properties = self.parse_property_map()?;
         }
 
-        Ok((alias, label, properties))
+        Ok((alias, label, properties, var_length))
     }
 
     fn parse_property_map(&mut self) -> Result<Vec<(String, Expr)>, GqliteError> {
@@ -390,6 +442,58 @@ impl Parser {
         Ok(Clause::Delete(DeleteClause { detach, exprs }))
     }
 
+    // ── UNWIND ──────────────────────────────────────────────────
+
+    fn parse_unwind_clause(&mut self) -> Result<Clause, GqliteError> {
+        self.expect(&Token::Unwind)?;
+        let expr = self.parse_expr()?;
+        self.expect(&Token::As)?;
+        let alias = self.expect_ident()?;
+        Ok(Clause::Unwind(UnwindClause { expr, alias }))
+    }
+
+    // ── MERGE ───────────────────────────────────────────────────
+
+    fn parse_merge_clause(&mut self) -> Result<Clause, GqliteError> {
+        self.expect(&Token::Merge)?;
+        let pattern = self.parse_graph_pattern()?;
+
+        let mut on_create = Vec::new();
+        let mut on_match = Vec::new();
+
+        // Parse optional ON CREATE SET / ON MATCH SET clauses
+        while self.check(&Token::On) {
+            self.advance();
+            if self.check(&Token::Create) {
+                self.advance();
+                self.expect(&Token::Set)?;
+                let mut items = vec![self.parse_set_item()?];
+                while self.check(&Token::Comma) {
+                    self.advance();
+                    items.push(self.parse_set_item()?);
+                }
+                on_create = items;
+            } else if self.check(&Token::Match) {
+                self.advance();
+                self.expect(&Token::Set)?;
+                let mut items = vec![self.parse_set_item()?];
+                while self.check(&Token::Comma) {
+                    self.advance();
+                    items.push(self.parse_set_item()?);
+                }
+                on_match = items;
+            } else {
+                return Err(self.error("expected CREATE or MATCH after ON"));
+            }
+        }
+
+        Ok(Clause::Merge(MergeClause {
+            pattern,
+            on_create,
+            on_match,
+        }))
+    }
+
     // ── DDL ─────────────────────────────────────────────────────
 
     fn parse_create_node_table(&mut self) -> Result<Statement, GqliteError> {
@@ -484,6 +588,164 @@ impl Parser {
         Ok(Statement::DropTable(DropTableStmt { name }))
     }
 
+    fn parse_alter_table(&mut self) -> Result<Statement, GqliteError> {
+        self.expect(&Token::Alter)?;
+        self.expect(&Token::Table)?;
+        let table_name = self.expect_ident()?;
+
+        let action = match self.peek() {
+            Token::Add => {
+                // ALTER TABLE t ADD col_name TYPE
+                self.advance();
+                // optional COLUMN keyword
+                if self.check(&Token::Column) {
+                    self.advance();
+                }
+                let col_name = self.expect_ident()?;
+                let data_type = self.parse_data_type()?;
+                AlterTableAction::AddColumn {
+                    col: ColumnDefAst {
+                        name: col_name,
+                        data_type,
+                    },
+                }
+            }
+            Token::Drop => {
+                // ALTER TABLE t DROP COLUMN col_name
+                self.advance();
+                // optional COLUMN keyword
+                if self.check(&Token::Column) {
+                    self.advance();
+                }
+                let col_name = self.expect_ident()?;
+                AlterTableAction::DropColumn { col_name }
+            }
+            Token::Rename => {
+                self.advance();
+                if self.check(&Token::Column) {
+                    // ALTER TABLE t RENAME COLUMN old TO new
+                    self.advance();
+                    let old_name = self.expect_ident()?;
+                    self.expect(&Token::To)?;
+                    let new_name = self.expect_ident()?;
+                    AlterTableAction::RenameColumn { old_name, new_name }
+                } else if self.check(&Token::To) {
+                    // ALTER TABLE t RENAME TO new_name
+                    self.advance();
+                    let new_name = self.expect_ident()?;
+                    AlterTableAction::RenameTable { new_name }
+                } else {
+                    return Err(self.error("expected COLUMN or TO after RENAME"));
+                }
+            }
+            _ => return Err(self.error("expected ADD, DROP, or RENAME after ALTER TABLE")),
+        };
+
+        Ok(Statement::AlterTable(AlterTableStmt {
+            table_name,
+            action,
+        }))
+    }
+
+    fn parse_copy(&mut self) -> Result<Statement, GqliteError> {
+        self.expect(&Token::Copy)?;
+
+        // Check if it's COPY ... TO (export) or COPY ... FROM (import)
+        // COPY (query) TO 'path' or COPY table FROM/TO 'path'
+        if self.check(&Token::LParen) {
+            // COPY (query) TO 'path'
+            self.advance(); // consume (
+            let query = self.parse_query_body()?;
+            self.expect(&Token::RParen)?;
+            self.expect(&Token::To)?;
+            let file_path = self.expect_string_lit()?;
+            let (header, delimiter) = self.parse_copy_options()?;
+            return Ok(Statement::CopyTo(CopyToStmt {
+                source: CopySource::Query(Box::new(query)),
+                file_path,
+                header,
+                delimiter,
+            }));
+        }
+
+        let table_name = self.expect_ident()?;
+
+        if self.check(&Token::From) {
+            self.advance();
+            let file_path = self.expect_string_lit()?;
+            let (header, delimiter) = self.parse_copy_options()?;
+            Ok(Statement::CopyFrom(CopyFromStmt {
+                table_name,
+                file_path,
+                header,
+                delimiter,
+            }))
+        } else if self.check(&Token::To) {
+            self.advance();
+            let file_path = self.expect_string_lit()?;
+            let (header, delimiter) = self.parse_copy_options()?;
+            Ok(Statement::CopyTo(CopyToStmt {
+                source: CopySource::Table(table_name),
+                file_path,
+                header,
+                delimiter,
+            }))
+        } else {
+            Err(self.error("expected FROM or TO after COPY <table>"))
+        }
+    }
+
+    /// Parse optional WITH (HEADER, DELIMITER 'x') options.
+    fn parse_copy_options(&mut self) -> Result<(bool, char), GqliteError> {
+        let mut header = true;
+        let mut delimiter = ',';
+
+        // Check for WITH keyword or just (
+        if self.check(&Token::With) {
+            self.advance();
+        }
+        if self.check(&Token::LParen) {
+            self.advance();
+            loop {
+                if self.check(&Token::RParen) {
+                    self.advance();
+                    break;
+                }
+                if self.check(&Token::Header) {
+                    self.advance();
+                    // Optionally followed by = true/false
+                    if self.check(&Token::Eq) {
+                        self.advance();
+                        if self.check(&Token::True) {
+                            self.advance();
+                            header = true;
+                        } else if self.check(&Token::False) {
+                            self.advance();
+                            header = false;
+                        }
+                    }
+                } else if self.check(&Token::Delimiter) {
+                    self.advance();
+                    // Expect delimiter character as a string literal
+                    if self.check(&Token::Eq) {
+                        self.advance();
+                    }
+                    let delim_str = self.expect_string_lit()?;
+                    if let Some(c) = delim_str.chars().next() {
+                        delimiter = c;
+                    }
+                } else {
+                    self.advance(); // skip unknown options
+                }
+                if self.check(&Token::Comma) {
+                    self.advance();
+                }
+            }
+        }
+
+        Ok((header, delimiter))
+    }
+
     fn parse_data_type(&mut self) -> Result<DataType, GqliteError> {
         match self.peek() {
             Token::TypeInt64 => {
@@ -502,7 +764,11 @@ impl Parser {
                 self.advance();
                 Ok(DataType::Bool)
             }
-            _ => Err(self.error("expected type (INT64, DOUBLE, STRING, BOOL)")),
+            Token::TypeSerial => {
+                self.advance();
+                Ok(DataType::Serial)
+            }
+            _ => Err(self.error("expected type (INT64, DOUBLE, STRING, BOOL, SERIAL)")),
         }
     }
 
@@ -700,8 +966,35 @@ impl Parser {
                 self.expect(&Token::RParen)?;
                 Ok(expr)
             }
+            Token::LBracket => self.parse_list_literal(),
+            Token::Cast => {
+                self.advance();
+                self.expect(&Token::LParen)?;
+                let expr = self.parse_expr()?;
+                self.expect(&Token::As)?;
+                let target_type = self.parse_data_type()?;
+                self.expect(&Token::RParen)?;
+                Ok(Expr::Cast {
+                    expr: Box::new(expr),
+                    target_type,
+                })
+            }
             _ => Err(self.error(&format!("unexpected token: {:?}", self.peek()))),
         }
+    }
+
+    fn parse_list_literal(&mut self) -> Result<Expr, GqliteError> {
+        self.expect(&Token::LBracket)?;
+        let mut items = Vec::new();
+        if !self.check(&Token::RBracket) {
+            items.push(self.parse_expr()?);
+            while self.check(&Token::Comma) {
+                self.advance();
+                items.push(self.parse_expr()?);
+            }
+        }
+        self.expect(&Token::RBracket)?;
+        Ok(Expr::ListLit(items))
     }
 
     fn parse_function_call(&mut self, name: String) -> Result<Expr, GqliteError> {
@@ -783,6 +1076,42 @@ impl Parser {
             }
             _ => Err(self.error(&format!("expected identifier, got {:?}", self.peek()))),
         }
+    }
+
+    fn expect_string_lit(&mut self) -> Result<String, GqliteError> {
+        match self.peek().clone() {
+            Token::StringLit(s) => {
+                self.advance();
+                Ok(s)
+            }
+            _ => Err(self.error(&format!("expected string literal, got {:?}", self.peek()))),
+        }
+    }
+
+    /// Parse a query body (clauses only, no Statement wrapper).
+    fn parse_query_body(&mut self) -> Result<QueryStatement, GqliteError> {
+        let mut clauses = Vec::new();
+        loop {
+            match self.peek() {
+                Token::Match | Token::Optional => clauses.push(self.parse_match_clause()?),
+                Token::Where => clauses.push(self.parse_where_clause()?),
+                Token::Return => clauses.push(self.parse_return_clause()?),
+                Token::With => clauses.push(self.parse_with_clause()?),
+                Token::Order => clauses.push(self.parse_order_by_clause()?),
+                Token::Limit => clauses.push(self.parse_limit_clause()?),
+                Token::Skip => clauses.push(self.parse_skip_clause()?),
+                Token::Create => clauses.push(self.parse_create_clause()?),
+                Token::Set => clauses.push(self.parse_set_clause()?),
+                Token::Delete | Token::Detach => clauses.push(self.parse_delete_clause()?),
+                Token::Unwind => clauses.push(self.parse_unwind_clause()?),
+                Token::Merge => clauses.push(self.parse_merge_clause()?),
+                _ => break,
+            }
+        }
+        if clauses.is_empty() {
+            return Err(self.error("expected a query clause"));
+        }
+        Ok(QueryStatement { clauses })
     }
 
     fn error(&self, msg: &str) -> GqliteError {
@@ -1158,5 +1487,115 @@ mod tests {
     fn parse_error_message() {
         let err = parse_err("MATCH");
         assert!(err.contains("parse error"));
+    }
+
+    // ── OPTIONAL MATCH / UNION / UNWIND / MERGE tests (Plan 038/039) ──
+
+    #[test]
+    fn optional_match() {
+        let stmt = parse("OPTIONAL MATCH (n:Person) RETURN n");
+        let Statement::Query(q) = stmt else { panic!() };
+        let Clause::Match(m) = &q.clauses[0] else { panic!() };
+        assert!(m.optional);
+    }
+
+    #[test]
+    fn union_all() {
+        let stmt = parse("MATCH (a:Person) RETURN a UNION ALL MATCH (b:Person) RETURN b");
+        assert!(matches!(stmt, Statement::Union { all: true, .. }));
+    }
+
+    #[test]
+    fn union_distinct() {
+        let stmt = parse("MATCH (a:Person) RETURN a UNION MATCH (b:Person) RETURN b");
+        assert!(matches!(stmt, Statement::Union { all: false, .. }));
+    }
+
+    #[test]
+    fn unwind_clause() {
+        let stmt = parse("UNWIND [1, 2, 3] AS x RETURN x");
+        let Statement::Query(q) = stmt else { panic!() };
+        let Clause::Unwind(u) = &q.clauses[0] else { panic!() };
+        assert_eq!(u.alias, "x");
+        assert!(matches!(u.expr, Expr::ListLit(_)));
+    }
+
+    #[test]
+    fn list_literal() {
+        let stmt = parse("UNWIND [1, 'hello', 3.14] AS item RETURN item");
+        let Statement::Query(q) = stmt else { panic!() };
+        let Clause::Unwind(u) = &q.clauses[0] else { panic!() };
+        let Expr::ListLit(items) = &u.expr else { panic!() };
+        assert_eq!(items.len(), 3);
+    }
+
+    #[test]
+    fn merge_basic() {
+        let stmt = parse("MERGE (n:Person {name: 'Alice'})");
+        let Statement::Query(q) = stmt else { panic!() };
+        assert!(matches!(&q.clauses[0], Clause::Merge(_)));
+    }
+
+    #[test]
+    fn merge_with_on_create_and_on_match() {
+        let stmt = parse("MERGE (n:Person {name: 'Alice'}) ON CREATE SET n.age = 30 ON MATCH SET n.age = 31");
+        let Statement::Query(q) = stmt else { panic!() };
+        let Clause::Merge(m) = &q.clauses[0] else { panic!() };
+        assert_eq!(m.on_create.len(), 1);
+        assert_eq!(m.on_match.len(), 1);
+    }
+
+    #[test]
+    fn cast_expression() {
+        let stmt = parse("RETURN CAST('42' AS INT64)");
+        let Statement::Query(q) = stmt else { panic!() };
+        let Clause::Return(r) = &q.clauses[0] else { panic!() };
+        let Expr::Cast { target_type, .. } = &r.items[0].expr else { panic!() };
+        assert_eq!(*target_type, DataType::Int64);
+    }
+
+    #[test]
+    fn var_length_path() {
+        let stmt = parse("MATCH (a:Person)-[:KNOWS*1..3]->(b:Person) RETURN b");
+        let Statement::Query(q) = stmt else { panic!() };
+        let Clause::Match(m) = &q.clauses[0] else { panic!() };
+        let PatternElement::Rel(r) = &m.pattern.paths[0].elements[1] else {
+            panic!()
+        };
+        assert_eq!(r.var_length, Some((1, 3)));
+        assert_eq!(r.direction, Direction::Right);
+    }
+
+    #[test]
+    fn var_length_star_only() {
+        let stmt = parse("MATCH (a)-[*]->(b) RETURN b");
+        let Statement::Query(q) = stmt else { panic!() };
+        let Clause::Match(m) = &q.clauses[0] else { panic!() };
+        let PatternElement::Rel(r) = &m.pattern.paths[0].elements[1] else {
+            panic!()
+        };
+        assert_eq!(r.var_length, Some((1, u32::MAX)));
+    }
+
+    #[test]
+    fn var_length_max_only() {
+        let stmt = parse("MATCH (a)-[:KNOWS*..5]->(b) RETURN b");
+        let Statement::Query(q) = stmt else { panic!() };
+        let Clause::Match(m) = &q.clauses[0] else { panic!() };
+        let PatternElement::Rel(r) = &m.pattern.paths[0].elements[1] else {
+            panic!()
+        };
+        assert_eq!(r.var_length, Some((1, 5)));
+    }
+
+    #[test]
+    fn var_length_exact() {
+        let stmt = parse("MATCH (a)-[*2]->(b) RETURN b");
+        let Statement::Query(q) = stmt else { panic!() };
+        let Clause::Match(m) = &q.clauses[0] else { panic!() };
+        let PatternElement::Rel(r) = &m.pattern.paths[0].elements[1] else {
+            panic!()
+        };
+        assert_eq!(r.var_length, Some((2, 2)));
     }
 }

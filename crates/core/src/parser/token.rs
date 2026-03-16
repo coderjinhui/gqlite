@@ -9,9 +9,10 @@ fn parse_ident_or_keyword(lex: &mut logos::Lexer<Token>) -> logos::FilterResult<
         | "DESC" | "LIMIT" | "SKIP" | "CREATE" | "SET" | "DELETE" | "DETACH" | "MERGE"
         | "NODE" | "REL" | "TABLE" | "DROP" | "PRIMARY" | "KEY" | "AND" | "OR" | "NOT"
         | "IS" | "NULL" | "TRUE" | "FALSE" | "AS" | "IN" | "EXISTS" | "DISTINCT"
-        | "UNION" | "ALL" | "UNWIND" | "BEGIN" | "COMMIT" | "ROLLBACK" | "CASE" | "WHEN"
-        | "THEN" | "ELSE" | "END" | "FROM" | "TO" | "INT64" | "DOUBLE" | "STRING"
-        | "BOOL" | "SERIAL" => logos::FilterResult::Skip,
+        | "UNION" | "ALL" | "UNWIND" | "ON" | "BEGIN" | "COMMIT" | "ROLLBACK" | "CASE"
+        | "WHEN" | "THEN" | "ELSE" | "END" | "FROM" | "TO" | "INT64" | "DOUBLE"
+        | "STRING" | "BOOL" | "SERIAL" | "ALTER" | "ADD" | "RENAME" | "COLUMN"
+        | "COPY" | "HEADER" | "DELIMITER" | "CAST" => logos::FilterResult::Skip,
         _ => logos::FilterResult::Emit(slice.to_string()),
     }
 }
@@ -141,6 +142,24 @@ pub enum Token {
     From,
     #[regex("(?i)to", priority = 10)]
     To,
+    #[regex("(?i)on", priority = 10)]
+    On,
+    #[regex("(?i)alter", priority = 10)]
+    Alter,
+    #[regex("(?i)add", priority = 10)]
+    Add,
+    #[regex("(?i)rename", priority = 10)]
+    Rename,
+    #[regex("(?i)column", priority = 10)]
+    Column,
+    #[regex("(?i)copy", priority = 10)]
+    Copy,
+    #[regex("(?i)header", priority = 10)]
+    Header,
+    #[regex("(?i)delimiter", priority = 10)]
+    Delimiter,
+    #[regex("(?i)cast", priority = 10)]
+    Cast,
 
     // Type keywords
     #[regex("(?i)int64", priority = 10)]

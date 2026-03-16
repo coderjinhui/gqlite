@@ -10,6 +10,14 @@ pub enum Statement {
     CreateNodeTable(CreateNodeTableStmt),
     CreateRelTable(CreateRelTableStmt),
     DropTable(DropTableStmt),
+    AlterTable(AlterTableStmt),
+    CopyFrom(CopyFromStmt),
+    CopyTo(CopyToStmt),
+    Union {
+        left: Box<Statement>,
+        right: Box<Statement>,
+        all: bool,
+    },
 }
 
 // ── Query Statement ─────────────────────────────────────────────
@@ -32,6 +40,8 @@ pub enum Clause {
     Create(CreateClause),
     Set(SetClause),
     Delete(DeleteClause),
+    Unwind(UnwindClause),
+    Merge(MergeClause),
 }
 
 // ── MATCH ───────────────────────────────────────────────────────
@@ -73,6 +83,9 @@ pub struct RelPattern {
     pub label: Option<String>,
     pub direction: Direction,
     pub properties: Vec<(String, Expr)>,
+    /// Variable-length path: Some((min_hops, max_hops)). `*1..3` → (1,3).
+    /// `*` alone → (1, u32::MAX). `*..5` → (1, 5). `*3..` → (3, u32::MAX).
+    pub var_length: Option<(u32, u32)>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -171,6 +184,23 @@ pub struct DeleteClause {
     pub exprs: Vec<Expr>,
 }
 
+// ── UNWIND ──────────────────────────────────────────────────────
+
+#[derive(Debug, Clone)]
+pub struct UnwindClause {
+    pub expr: Expr,
+    pub alias: String,
+}
+
+// ── MERGE ───────────────────────────────────────────────────────
+
+#[derive(Debug, Clone)]
+pub struct MergeClause {
+    pub pattern: GraphPattern,
+    pub on_create: Vec<SetItem>,
+    pub on_match: Vec<SetItem>,
+}
+
 // ── DDL Statements ──────────────────────────────────────────────
 
 #[derive(Debug, Clone)]
@@ -194,9 +224,47 @@ pub struct DropTableStmt {
 }
 
 #[derive(Debug, Clone)]
+pub struct AlterTableStmt {
+    pub table_name: String,
+    pub action: AlterTableAction,
+}
+
+#[derive(Debug, Clone)]
+pub enum AlterTableAction {
+    AddColumn { col: ColumnDefAst },
+    DropColumn { col_name: String },
+    RenameTable { new_name: String },
+    RenameColumn { old_name: String, new_name: String },
+}
+
+#[derive(Debug, Clone)]
 pub struct ColumnDefAst {
     pub name: String,
     pub data_type: DataType,
+}
+
+/// COPY <table> FROM '<path>' [WITH (...)]
+#[derive(Debug, Clone)]
+pub struct CopyFromStmt {
+    pub table_name: String,
+    pub file_path: String,
+    pub header: bool,
+    pub delimiter: char,
+}
+
+/// COPY <table_or_query> TO '<path>' [WITH (...)]
+#[derive(Debug, Clone)]
+pub struct CopyToStmt {
+    pub source: CopySource,
+    pub file_path: String,
+    pub header: bool,
+    pub delimiter: char,
+}
+
+#[derive(Debug, Clone)]
+pub enum CopySource {
+    Table(String),
+    Query(Box<QueryStatement>),
 }
 
 // ── Expressions ─────────────────────────────────────────────────
@@ -243,6 +311,13 @@ pub enum Expr {
     },
     /// Star expression (*) — used in RETURN * or count(*).
     Star,
+    /// List literal: [expr, expr, ...]
+    ListLit(Vec<Expr>),
+    /// CAST(expr AS type)
+    Cast {
+        expr: Box<Expr>,
+        target_type: DataType,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
