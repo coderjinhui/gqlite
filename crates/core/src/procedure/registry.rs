@@ -23,6 +23,7 @@ impl ProcedureRegistry {
         reg.register(Box::new(super::graph_algo::Dijkstra));
         reg.register(Box::new(super::graph_algo::PageRank));
         reg.register(Box::new(super::graph_algo::LabelPropagation));
+        reg.register(Box::new(super::graph_algo::TriangleCount));
         reg
     }
 

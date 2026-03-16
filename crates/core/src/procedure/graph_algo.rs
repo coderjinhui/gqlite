@@ -1,7 +1,7 @@
 //! Graph algorithm procedures (degree centrality, WCC, Dijkstra, LPA, etc.).
 
 use std::cmp::Reverse;
-use std::collections::{BinaryHeap, HashMap};
+use std::collections::{BinaryHeap, HashMap, HashSet};
 
 use super::{Procedure, ProcedureRow};
 use crate::error::GqliteError;
@@ -841,6 +841,188 @@ impl Procedure for LabelPropagation {
             .into_iter()
             .map(|(_tid, offset, community)| {
                 vec![Value::Int(offset as i64), Value::Int(community)]
+            })
+            .collect();
+
+        Ok(rows)
+    }
+}
+
+// ── Triangle Count ──────────────────────────────────────────────
+
+/// Counts the number of triangles each node participates in.
+///
+/// Usage: `CALL triangle_count('REL_NAME') YIELD node_id, triangles`
+///
+/// Algorithm (neighbor-intersection, edges treated as undirected):
+/// 1. Precompute sorted undirected neighbor sets for every node.
+/// 2. For each edge (u, v) where u_idx < v_idx, intersect N(u) and N(v).
+///    For each common neighbor w with w_idx > v_idx, increment counts for u, v, w.
+/// 3. Return per-node triangle counts. Nodes with 0 triangles are included.
+pub struct TriangleCount;
+
+impl Procedure for TriangleCount {
+    fn name(&self) -> &str {
+        "triangle_count"
+    }
+
+    fn output_columns(&self) -> Vec<String> {
+        vec!["node_id".to_string(), "triangles".to_string()]
+    }
+
+    fn execute(
+        &self,
+        args: &[Value],
+        db: &crate::DatabaseInner,
+    ) -> Result<Vec<ProcedureRow>, GqliteError> {
+        // Extract relationship table name from arguments
+        let rel_name = match args.first() {
+            Some(Value::String(s)) => s.clone(),
+            _ => {
+                return Err(GqliteError::Execution(
+                    "triangle_count requires a string argument (rel table name)".into(),
+                ))
+            }
+        };
+
+        let catalog = db.catalog.read().unwrap();
+        let storage = db.storage.read().unwrap();
+
+        // Find the relationship table entry in the catalog
+        let rel_entry = catalog.get_rel_table(&rel_name).ok_or_else(|| {
+            GqliteError::Execution(format!("relation table '{}' not found", rel_name))
+        })?;
+
+        let rel_table_id = rel_entry.table_id;
+        let src_table_id = rel_entry.src_table_id;
+        let dst_table_id = rel_entry.dst_table_id;
+
+        // Get the RelTable from storage
+        let rel_table = storage.rel_tables.get(&rel_table_id).ok_or_else(|| {
+            GqliteError::Execution(format!(
+                "relation table '{}' not found in storage",
+                rel_name
+            ))
+        })?;
+
+        // Collect all node offsets into a contiguous index.
+        // Key: (table_id, offset) -> contiguous index
+        let mut node_list: Vec<(u32, u64)> = Vec::new();
+        let mut node_index: HashMap<(u32, u64), usize> = HashMap::new();
+
+        let mut add_nodes = |table_id: u32, offsets: Vec<u64>| {
+            for offset in offsets {
+                let key = (table_id, offset);
+                if !node_index.contains_key(&key) {
+                    let idx = node_list.len();
+                    node_list.push(key);
+                    node_index.insert(key, idx);
+                }
+            }
+        };
+
+        // Scan source node table
+        if let Some(src_node_table) = storage.node_tables.get(&src_table_id) {
+            let offsets: Vec<u64> = src_node_table.scan().map(|(off, _)| off).collect();
+            add_nodes(src_table_id, offsets);
+        }
+
+        // Scan destination node table (if different from source)
+        if src_table_id != dst_table_id {
+            if let Some(dst_node_table) = storage.node_tables.get(&dst_table_id) {
+                let offsets: Vec<u64> = dst_node_table.scan().map(|(off, _)| off).collect();
+                add_nodes(dst_table_id, offsets);
+            }
+        }
+
+        let n = node_list.len();
+        if n == 0 {
+            return Ok(vec![]);
+        }
+
+        // Precompute undirected neighbor sets (as sorted Vecs for fast intersection).
+        // Combine forward (get_rels_from) and backward (get_rels_to) edges, dedup via HashSet.
+        let mut neighbors: Vec<Vec<usize>> = vec![Vec::new(); n];
+
+        for (idx, &(tid, offset)) in node_list.iter().enumerate() {
+            let mut nbr_set: HashSet<usize> = HashSet::new();
+
+            // Forward edges: this node as source
+            if tid == src_table_id {
+                for (dst_offset, _rel_id) in rel_table.get_rels_from(offset) {
+                    let dst_key = (dst_table_id, dst_offset);
+                    if let Some(&dst_idx) = node_index.get(&dst_key) {
+                        if dst_idx != idx {
+                            nbr_set.insert(dst_idx);
+                        }
+                    }
+                }
+            }
+            // Backward edges: this node as destination
+            if tid == dst_table_id {
+                for (src_offset, _rel_id) in rel_table.get_rels_to(offset) {
+                    let src_key = (src_table_id, src_offset);
+                    if let Some(&src_idx) = node_index.get(&src_key) {
+                        if src_idx != idx {
+                            nbr_set.insert(src_idx);
+                        }
+                    }
+                }
+            }
+
+            let mut sorted_nbrs: Vec<usize> = nbr_set.into_iter().collect();
+            sorted_nbrs.sort_unstable();
+            neighbors[idx] = sorted_nbrs;
+        }
+
+        // Count triangles using sorted-intersection approach:
+        // For each edge (u, v) where u < v, intersect N(u) and N(v),
+        // and for each w in the intersection where w > v, increment all three counts.
+        let mut triangles: Vec<i64> = vec![0; n];
+
+        for u in 0..n {
+            for &v in &neighbors[u] {
+                if v <= u {
+                    continue; // only process edges where u < v
+                }
+                // Sorted intersection of neighbors[u] and neighbors[v],
+                // only counting w > v.
+                let nu = &neighbors[u];
+                let nv = &neighbors[v];
+                let mut i = 0;
+                let mut j = 0;
+                while i < nu.len() && j < nv.len() {
+                    if nu[i] < nv[j] {
+                        i += 1;
+                    } else if nu[i] > nv[j] {
+                        j += 1;
+                    } else {
+                        // nu[i] == nv[j] — common neighbor
+                        let w = nu[i];
+                        if w > v {
+                            triangles[u] += 1;
+                            triangles[v] += 1;
+                            triangles[w] += 1;
+                        }
+                        i += 1;
+                        j += 1;
+                    }
+                }
+            }
+        }
+
+        // Build result rows sorted by (table_id, offset) for deterministic output.
+        let mut entries: Vec<(u32, u64, i64)> = node_list
+            .iter()
+            .enumerate()
+            .map(|(idx, &(tid, offset))| (tid, offset, triangles[idx]))
+            .collect();
+        entries.sort_by_key(|&(tid, off, _)| (tid, off));
+
+        let rows: Vec<ProcedureRow> = entries
+            .into_iter()
+            .map(|(_tid, offset, tri_count)| {
+                vec![Value::Int(offset as i64), Value::Int(tri_count)]
             })
             .collect();
 
