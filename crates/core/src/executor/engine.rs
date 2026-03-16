@@ -637,7 +637,7 @@ impl Engine {
                 rel_table_id,
                 src_alias,
                 dst_alias,
-                properties: _,
+                properties,
             } => {
                 let input_result = self.execute_operator(input, db, txn_id)?;
                 self.exec_insert_rel(
@@ -647,6 +647,7 @@ impl Engine {
                     *rel_table_id,
                     src_alias,
                     dst_alias,
+                    properties,
                     txn_id,
                 )
             }
@@ -1547,6 +1548,7 @@ impl Engine {
         rel_table_id: u32,
         src_alias: &str,
         dst_alias: &str,
+        properties: &[(usize, Expr)],
         txn_id: u64,
     ) -> Result<Intermediate, GqliteError> {
         let src_col = input
@@ -1563,6 +1565,15 @@ impl Engine {
             .ok_or_else(|| {
                 GqliteError::Execution(format!("dest alias '{}' not found", dst_alias))
             })?;
+
+        // Determine schema column count from catalog for building property vector
+        let num_schema_cols = {
+            let catalog = db.catalog.read().unwrap();
+            catalog
+                .get_rel_table(rel_table_name)
+                .map(|e| e.columns.len())
+                .unwrap_or(0)
+        };
 
         let mut storage = db.storage.write().unwrap();
         let rel_table = storage.rel_tables.get_mut(&rel_table_id).ok_or_else(|| {
@@ -1587,15 +1598,29 @@ impl Engine {
                 }
             };
 
+            // Build property values vector (aligned with rel table schema)
+            let prop_values = if !properties.is_empty() {
+                let mut vals = vec![Value::Null; num_schema_cols];
+                for (col_idx, expr) in properties {
+                    let val = self.eval_expr(expr, &input.columns, row)?;
+                    if *col_idx < vals.len() {
+                        vals[*col_idx] = val;
+                    }
+                }
+                vals
+            } else {
+                vec![]
+            };
+
             Self::wal_append(db, txn_id, WalPayload::InsertRel {
                 rel_table_name: rel_table_name.to_string(),
                 rel_table_id,
                 src: src_id,
                 dst: dst_id,
-                properties: vec![],
+                properties: prop_values.clone(),
             })?;
 
-            rel_table.insert_rel(src_id, dst_id, &[])?;
+            rel_table.insert_rel(src_id, dst_id, &prop_values)?;
         }
         rel_table.compact();
 

@@ -317,6 +317,9 @@ pub struct RelTable {
     /// Backward CSR groups, indexed by destination node group.
     bwd_groups: Vec<CSRNodeGroup>,
     next_rel_id: u64,
+    /// Per-relationship property storage: rel_id -> property values (aligned with schema).
+    #[serde(default)]
+    rel_properties: HashMap<u64, Vec<Value>>,
 }
 
 impl RelTable {
@@ -334,6 +337,7 @@ impl RelTable {
             fwd_groups: Vec::new(),
             bwd_groups: Vec::new(),
             next_rel_id: 0,
+            rel_properties: HashMap::new(),
         }
     }
 
@@ -342,7 +346,7 @@ impl RelTable {
         &mut self,
         src: InternalId,
         dst: InternalId,
-        _props: &[Value],
+        props: &[Value],
     ) -> Result<u64, GqliteError> {
         let rel_id = self.next_rel_id;
         self.next_rel_id += 1;
@@ -356,7 +360,7 @@ impl RelTable {
             src_offset: src_offset_in_group,
             dst_offset: dst.offset,
             rel_id,
-            properties: vec![], // TODO: store props in property columns
+            properties: vec![], // CSR doesn't use properties directly
         });
 
         // Ensure BWD group exists
@@ -367,6 +371,11 @@ impl RelTable {
             rel_id,
             properties: vec![],
         });
+
+        // Store rel properties if any were provided
+        if !props.is_empty() {
+            self.rel_properties.insert(rel_id, props.to_vec());
+        }
 
         Ok(rel_id)
     }
@@ -443,6 +452,19 @@ impl RelTable {
             }
         }
         edges
+    }
+
+    /// Get the schema (column name, type) for relationship properties.
+    pub fn schema(&self) -> &[(String, DataType)] {
+        &self.schema
+    }
+
+    /// Read a property value for a given rel_id by column name.
+    /// Returns None if the rel_id has no stored properties or the column is not found.
+    pub fn get_rel_property(&self, rel_id: u64, col_name: &str) -> Option<Value> {
+        let col_idx = self.schema.iter().position(|(name, _)| name == col_name)?;
+        let props = self.rel_properties.get(&rel_id)?;
+        props.get(col_idx).cloned()
     }
 
     fn ensure_fwd_group(&mut self, group_idx: usize) {

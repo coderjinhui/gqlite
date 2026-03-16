@@ -20,6 +20,7 @@ impl ProcedureRegistry {
         reg.register(Box::new(DbmsTables));
         reg.register(Box::new(super::graph_algo::DegreeCentrality));
         reg.register(Box::new(super::graph_algo::Wcc));
+        reg.register(Box::new(super::graph_algo::Dijkstra));
         reg
     }
 

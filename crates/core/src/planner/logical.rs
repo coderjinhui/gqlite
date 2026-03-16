@@ -931,13 +931,26 @@ impl<'a> Planner<'a> {
                             let (src_alias, dst_alias) =
                                 self.extract_rel_endpoints(path, r);
 
+                            // Resolve rel properties: map property names to column indices
+                            let properties: Vec<(usize, Expr)> = r
+                                .properties
+                                .iter()
+                                .filter_map(|(name, expr)| {
+                                    entry
+                                        .columns
+                                        .iter()
+                                        .position(|c| c.name == *name)
+                                        .map(|idx| (idx, expr.clone()))
+                                })
+                                .collect();
+
                             return Ok(LogicalOperator::InsertRel {
                                 input: Box::new(input.unwrap()),
                                 rel_table_name: label.clone(),
                                 rel_table_id: entry.table_id,
                                 src_alias,
                                 dst_alias,
-                                properties: vec![],
+                                properties,
                             });
                         }
                     }

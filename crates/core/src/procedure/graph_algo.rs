@@ -1,6 +1,7 @@
-//! Graph algorithm procedures (degree centrality, WCC, etc.).
+//! Graph algorithm procedures (degree centrality, WCC, Dijkstra, etc.).
 
-use std::collections::HashMap;
+use std::cmp::Reverse;
+use std::collections::{BinaryHeap, HashMap};
 
 use super::{Procedure, ProcedureRow};
 use crate::error::GqliteError;
@@ -286,5 +287,193 @@ impl Procedure for Wcc {
             .collect();
 
         Ok(result)
+    }
+}
+
+// ── Dijkstra (Weighted Shortest Path) ──────────────────────────
+
+/// Computes the weighted shortest path between two nodes using Dijkstra's algorithm.
+///
+/// Usage: `CALL dijkstra(source_id, target_id, 'REL_TYPE', 'weight_prop') YIELD path, cost`
+///
+/// Arguments:
+/// - source_id (Int): primary key of the source node
+/// - target_id (Int): primary key of the target node
+/// - rel_type (String): name of the relationship table
+/// - weight_prop (String): name of the property column storing edge weights
+///
+/// Returns one row with `path` (List of node IDs) and `cost` (Float),
+/// or zero rows if no path exists.
+pub struct Dijkstra;
+
+impl Procedure for Dijkstra {
+    fn name(&self) -> &str {
+        "dijkstra"
+    }
+
+    fn output_columns(&self) -> Vec<String> {
+        vec!["path".to_string(), "cost".to_string()]
+    }
+
+    fn execute(
+        &self,
+        args: &[Value],
+        db: &crate::DatabaseInner,
+    ) -> Result<Vec<ProcedureRow>, GqliteError> {
+        // Parse arguments: source_id, target_id, rel_type, weight_property
+        if args.len() < 4 {
+            return Err(GqliteError::Execution(
+                "dijkstra requires 4 arguments: source_id, target_id, rel_type, weight_property"
+                    .into(),
+            ));
+        }
+
+        let source_pk = &args[0];
+        let target_pk = &args[1];
+        let rel_name = match &args[2] {
+            Value::String(s) => s.clone(),
+            _ => {
+                return Err(GqliteError::Execution(
+                    "dijkstra: 3rd argument (rel_type) must be a string".into(),
+                ))
+            }
+        };
+        let weight_prop = match &args[3] {
+            Value::String(s) => s.clone(),
+            _ => {
+                return Err(GqliteError::Execution(
+                    "dijkstra: 4th argument (weight_property) must be a string".into(),
+                ))
+            }
+        };
+
+        let catalog = db.catalog.read().unwrap();
+        let storage = db.storage.read().unwrap();
+
+        // Find the relationship table entry in the catalog
+        let rel_entry = catalog.get_rel_table(&rel_name).ok_or_else(|| {
+            GqliteError::Execution(format!("relation table '{}' not found", rel_name))
+        })?;
+
+        let rel_table_id = rel_entry.table_id;
+        let src_table_id = rel_entry.src_table_id;
+
+        // Get the RelTable from storage
+        let rel_table = storage.rel_tables.get(&rel_table_id).ok_or_else(|| {
+            GqliteError::Execution(format!(
+                "relation table '{}' not found in storage",
+                rel_name
+            ))
+        })?;
+
+        // Get source node table for PK lookup
+        let src_node_table = storage.node_tables.get(&src_table_id).ok_or_else(|| {
+            GqliteError::Execution("source node table not found in storage".into())
+        })?;
+
+        // Resolve source and target node offsets from primary key values
+        let source_offset = src_node_table.lookup_pk(source_pk).ok_or_else(|| {
+            GqliteError::Execution(format!(
+                "dijkstra: source node with id {} not found",
+                source_pk
+            ))
+        })?;
+
+        let target_offset = src_node_table.lookup_pk(target_pk).ok_or_else(|| {
+            GqliteError::Execution(format!(
+                "dijkstra: target node with id {} not found",
+                target_pk
+            ))
+        })?;
+
+        // Dijkstra's algorithm using a min-heap
+        // Wrapper to make f64 orderable for BinaryHeap
+        #[derive(PartialEq)]
+        struct OrdF64(f64);
+        impl Eq for OrdF64 {}
+        impl PartialOrd for OrdF64 {
+            fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+                Some(self.cmp(other))
+            }
+        }
+        impl Ord for OrdF64 {
+            fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+                self.0.partial_cmp(&other.0).unwrap_or(std::cmp::Ordering::Equal)
+            }
+        }
+
+        let mut heap: BinaryHeap<Reverse<(OrdF64, u64)>> = BinaryHeap::new();
+        let mut dist: HashMap<u64, f64> = HashMap::new();
+        let mut parent: HashMap<u64, u64> = HashMap::new();
+
+        heap.push(Reverse((OrdF64(0.0), source_offset)));
+        dist.insert(source_offset, 0.0);
+
+        let mut found = false;
+
+        while let Some(Reverse((OrdF64(cost), node))) = heap.pop() {
+            if node == target_offset {
+                found = true;
+                break;
+            }
+
+            if cost > *dist.get(&node).unwrap_or(&f64::INFINITY) {
+                continue; // stale entry
+            }
+
+            // Get neighbors via forward CSR
+            let neighbors = rel_table.get_rels_from(node);
+            for (neighbor_offset, rel_id) in neighbors {
+                // Read edge weight from rel properties
+                let edge_weight = match rel_table.get_rel_property(rel_id, &weight_prop) {
+                    Some(Value::Float(w)) => w,
+                    Some(Value::Int(w)) => w as f64,
+                    _ => 1.0, // fallback to 1.0 if weight not found
+                };
+
+                let new_cost = cost + edge_weight;
+                if new_cost < *dist.get(&neighbor_offset).unwrap_or(&f64::INFINITY) {
+                    dist.insert(neighbor_offset, new_cost);
+                    parent.insert(neighbor_offset, node);
+                    heap.push(Reverse((OrdF64(new_cost), neighbor_offset)));
+                }
+            }
+        }
+
+        if !found {
+            return Ok(vec![]); // No path found
+        }
+
+        // Reconstruct path from parent map
+        let total_cost = *dist.get(&target_offset).unwrap_or(&0.0);
+        let mut path_offsets = vec![target_offset];
+        let mut current = target_offset;
+        while let Some(&prev) = parent.get(&current) {
+            path_offsets.push(prev);
+            current = prev;
+        }
+        path_offsets.reverse();
+
+        // Convert offsets back to PK values for user-friendly output
+        let pk_idx = catalog
+            .get_node_table_by_id(src_table_id)
+            .map(|e| e.primary_key_idx)
+            .unwrap_or(0);
+
+        let path_values: Vec<Value> = path_offsets
+            .iter()
+            .map(|&offset| {
+                src_node_table
+                    .read(offset)
+                    .ok()
+                    .and_then(|row| row.get(pk_idx).cloned())
+                    .unwrap_or(Value::Int(offset as i64))
+            })
+            .collect();
+
+        Ok(vec![vec![
+            Value::List(path_values),
+            Value::Float(total_cost),
+        ]])
     }
 }
