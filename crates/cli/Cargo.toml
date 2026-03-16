@@ -12,4 +12,4 @@ path = "src/main.rs"
 
 [dependencies]
 gqlite-core = { workspace = true }
-rustyline = "14"
+rustyline = { version = "14", features = ["derive"] }

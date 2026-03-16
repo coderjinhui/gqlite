@@ -1,8 +1,10 @@
+mod helper;
+
 use std::path::PathBuf;
 use std::time::Instant;
 
 use rustyline::error::ReadlineError;
-use rustyline::DefaultEditor;
+use rustyline::{CompletionType, Config, Editor};
 
 use gqlite_core::{Database, DatabaseConfig};
 
@@ -110,7 +112,11 @@ fn main() {
     }
     println!("Type .help for usage hints.\n");
 
-    let mut rl = DefaultEditor::new().expect("failed to create editor");
+    let config = Config::builder()
+        .completion_type(CompletionType::List)
+        .build();
+    let mut rl = Editor::with_config(config).expect("failed to create editor");
+    rl.set_helper(Some(helper::GqliteHelper));
 
     let history_path = home_dir().join(".gqlite_history");
     let _ = rl.load_history(&history_path);
