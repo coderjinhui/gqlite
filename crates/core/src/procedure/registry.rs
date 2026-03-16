@@ -21,6 +21,7 @@ impl ProcedureRegistry {
         reg.register(Box::new(super::graph_algo::DegreeCentrality));
         reg.register(Box::new(super::graph_algo::Wcc));
         reg.register(Box::new(super::graph_algo::Dijkstra));
+        reg.register(Box::new(super::graph_algo::PageRank));
         reg
     }
 

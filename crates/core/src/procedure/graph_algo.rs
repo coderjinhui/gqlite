@@ -477,3 +477,179 @@ impl Procedure for Dijkstra {
         ]])
     }
 }
+
+// ── PageRank ────────────────────────────────────────────────────
+
+/// Computes PageRank scores for all nodes connected by a given relationship table
+/// using power iteration.
+///
+/// Usage: `CALL pagerank('REL_NAME') YIELD node_id, score`
+///
+/// Returns one row per node with its PageRank score. Scores sum to approximately 1.0.
+/// Uses damping factor d=0.85, max 20 iterations, convergence tolerance 1e-6.
+pub struct PageRank;
+
+impl Procedure for PageRank {
+    fn name(&self) -> &str {
+        "pagerank"
+    }
+
+    fn output_columns(&self) -> Vec<String> {
+        vec!["node_id".to_string(), "score".to_string()]
+    }
+
+    fn execute(
+        &self,
+        args: &[Value],
+        db: &crate::DatabaseInner,
+    ) -> Result<Vec<ProcedureRow>, GqliteError> {
+        // Extract relationship table name from arguments
+        let rel_name = match args.first() {
+            Some(Value::String(s)) => s.clone(),
+            _ => {
+                return Err(GqliteError::Execution(
+                    "pagerank requires a string argument (rel table name)".into(),
+                ))
+            }
+        };
+
+        let catalog = db.catalog.read().unwrap();
+        let storage = db.storage.read().unwrap();
+
+        // Find the relationship table entry in the catalog
+        let rel_entry = catalog.get_rel_table(&rel_name).ok_or_else(|| {
+            GqliteError::Execution(format!("relation table '{}' not found", rel_name))
+        })?;
+
+        let rel_table_id = rel_entry.table_id;
+        let src_table_id = rel_entry.src_table_id;
+        let dst_table_id = rel_entry.dst_table_id;
+
+        // Get the RelTable from storage
+        let rel_table = storage.rel_tables.get(&rel_table_id).ok_or_else(|| {
+            GqliteError::Execution(format!(
+                "relation table '{}' not found in storage",
+                rel_name
+            ))
+        })?;
+
+        // Collect all node offsets into a contiguous index.
+        // Key: (table_id, offset) -> contiguous index
+        let mut node_list: Vec<(u32, u64)> = Vec::new();
+        let mut node_index: HashMap<(u32, u64), usize> = HashMap::new();
+
+        let mut add_nodes = |table_id: u32, offsets: Vec<u64>| {
+            for offset in offsets {
+                let key = (table_id, offset);
+                if !node_index.contains_key(&key) {
+                    let idx = node_list.len();
+                    node_list.push(key);
+                    node_index.insert(key, idx);
+                }
+            }
+        };
+
+        // Scan source node table
+        if let Some(src_node_table) = storage.node_tables.get(&src_table_id) {
+            let offsets: Vec<u64> = src_node_table.scan().map(|(off, _)| off).collect();
+            add_nodes(src_table_id, offsets);
+        }
+
+        // Scan destination node table (if different from source)
+        if src_table_id != dst_table_id {
+            if let Some(dst_node_table) = storage.node_tables.get(&dst_table_id) {
+                let offsets: Vec<u64> = dst_node_table.scan().map(|(off, _)| off).collect();
+                add_nodes(dst_table_id, offsets);
+            }
+        }
+
+        let n = node_list.len();
+        if n == 0 {
+            return Ok(vec![]);
+        }
+
+        let d = 0.85_f64;
+        let max_iter = 20;
+        let tolerance = 1e-6;
+
+        // Precompute out-degree and outgoing neighbor indices for each node
+        let mut out_neighbors: Vec<Vec<usize>> = vec![Vec::new(); n];
+        for (idx, &(tid, offset)) in node_list.iter().enumerate() {
+            // Only source-side nodes have outgoing edges
+            if tid == src_table_id {
+                let rels = rel_table.get_rels_from(offset);
+                for (dst_offset, _rel_id) in rels {
+                    let dst_key = (dst_table_id, dst_offset);
+                    if let Some(&dst_idx) = node_index.get(&dst_key) {
+                        out_neighbors[idx].push(dst_idx);
+                    }
+                }
+            }
+        }
+
+        // Power iteration
+        let mut scores: Vec<f64> = vec![1.0 / n as f64; n];
+
+        for _ in 0..max_iter {
+            // Sum up scores of dangling nodes (nodes with no outgoing edges).
+            // Their rank is redistributed uniformly to all nodes.
+            let dangling_sum: f64 = (0..n)
+                .filter(|&idx| out_neighbors[idx].is_empty())
+                .map(|idx| scores[idx])
+                .sum();
+
+            let mut new_scores = vec![((1.0 - d) + d * dangling_sum) / n as f64; n];
+
+            for idx in 0..n {
+                let out_degree = out_neighbors[idx].len();
+                if out_degree > 0 {
+                    let contribution = scores[idx] / out_degree as f64;
+                    for &neighbor_idx in &out_neighbors[idx] {
+                        new_scores[neighbor_idx] += d * contribution;
+                    }
+                }
+            }
+
+            // Check convergence: max absolute difference
+            let max_diff = scores
+                .iter()
+                .zip(new_scores.iter())
+                .map(|(a, b)| (a - b).abs())
+                .fold(0.0_f64, f64::max);
+
+            scores = new_scores;
+            if max_diff < tolerance {
+                break;
+            }
+        }
+
+        // Build result rows: convert offset to PK value, sorted by (table_id, offset)
+        let mut entries: Vec<(u32, u64, f64)> = node_list
+            .iter()
+            .enumerate()
+            .map(|(idx, &(tid, offset))| (tid, offset, scores[idx]))
+            .collect();
+        entries.sort_by_key(|&(tid, off, _)| (tid, off));
+
+        let rows: Vec<ProcedureRow> = entries
+            .into_iter()
+            .map(|(tid, offset, score)| {
+                // Try to get the PK value for user-friendly output
+                let pk_val = catalog
+                    .get_node_table_by_id(tid)
+                    .and_then(|entry| {
+                        let pk_idx = entry.primary_key_idx;
+                        storage
+                            .node_tables
+                            .get(&tid)
+                            .and_then(|nt| nt.read(offset).ok())
+                            .and_then(|row| row.get(pk_idx).cloned())
+                    })
+                    .unwrap_or(Value::Int(offset as i64));
+                vec![pk_val, Value::Float(score)]
+            })
+            .collect();
+
+        Ok(rows)
+    }
+}
