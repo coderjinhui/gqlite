@@ -401,6 +401,17 @@ impl<'a> Binder<'a> {
                 // At bind time we just accept it — the inner scope is separate.
                 Ok(())
             }
+            Expr::ListComprehension { list, filter, map_expr, .. } => {
+                // Validate the list expression (it may reference bound variables).
+                // The comprehension variable is local; filter/map_expr may reference it,
+                // so we skip deep validation of those sub-expressions at bind time.
+                self.validate_expr(list)?;
+                // filter and map_expr may reference the comprehension variable which
+                // is not in scope at bind time, so we don't validate them here.
+                let _ = filter;
+                let _ = map_expr;
+                Ok(())
+            }
         }
     }
 

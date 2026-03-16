@@ -1093,13 +1093,51 @@ impl Parser {
 
     fn parse_list_literal(&mut self) -> Result<Expr, ParseError> {
         self.expect(&Token::LBracket)?;
-        let mut items = Vec::new();
-        if !self.check(&Token::RBracket) {
-            items.push(self.parse_expr()?);
-            while self.check(&Token::Comma) {
-                self.advance();
-                items.push(self.parse_expr()?);
+
+        // Empty list: []
+        if self.check(&Token::RBracket) {
+            self.advance();
+            return Ok(Expr::ListLit(vec![]));
+        }
+
+        // Detect list comprehension: [ident IN ...]
+        if let Token::Ident(name) = self.peek().clone() {
+            if self.peek_at(1) == &Token::In {
+                let variable = name;
+                self.advance(); // consume ident
+                self.advance(); // consume IN
+                let list = self.parse_expr()?;
+
+                let filter = if self.check(&Token::Where) {
+                    self.advance();
+                    Some(Box::new(self.parse_expr()?))
+                } else {
+                    None
+                };
+
+                let map_expr = if self.check(&Token::Pipe) {
+                    self.advance();
+                    Some(Box::new(self.parse_expr()?))
+                } else {
+                    None
+                };
+
+                self.expect(&Token::RBracket)?;
+                return Ok(Expr::ListComprehension {
+                    variable,
+                    list: Box::new(list),
+                    filter,
+                    map_expr,
+                });
             }
+        }
+
+        // Regular list literal
+        let mut items = Vec::new();
+        items.push(self.parse_expr()?);
+        while self.check(&Token::Comma) {
+            self.advance();
+            items.push(self.parse_expr()?);
         }
         self.expect(&Token::RBracket)?;
         Ok(Expr::ListLit(items))

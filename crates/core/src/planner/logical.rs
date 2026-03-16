@@ -1161,6 +1161,22 @@ fn contains_aggregate(expr: &Expr) -> bool {
             contains_aggregate(expr) || contains_aggregate(list)
         }
         Expr::Exists(_) => false,
+        Expr::ListComprehension { list, filter, map_expr, .. } => {
+            if contains_aggregate(list) {
+                return true;
+            }
+            if let Some(f) = filter {
+                if contains_aggregate(f) {
+                    return true;
+                }
+            }
+            if let Some(m) = map_expr {
+                if contains_aggregate(m) {
+                    return true;
+                }
+            }
+            false
+        }
         _ => false,
     }
 }

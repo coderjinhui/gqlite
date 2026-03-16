@@ -2143,6 +2143,37 @@ impl Engine {
                 // EXISTS returns true if the inner query produces at least one row.
                 Ok(Value::Bool(!inner_result.rows.is_empty()))
             }
+
+            Expr::ListComprehension { variable, list, filter, map_expr } => {
+                let list_val = self.eval_expr(list, columns, row)?;
+                match list_val {
+                    Value::List(items) => {
+                        let mut result = Vec::new();
+                        let mut ext_columns: Vec<String> = columns.to_vec();
+                        ext_columns.push(variable.clone());
+                        for item in &items {
+                            let mut ext_row: Vec<Value> = row.to_vec();
+                            ext_row.push(item.clone());
+                            // Apply filter
+                            if let Some(f) = filter {
+                                let cond = self.eval_expr(f, &ext_columns, &ext_row)?;
+                                if cond != Value::Bool(true) {
+                                    continue;
+                                }
+                            }
+                            // Apply map
+                            if let Some(m) = map_expr {
+                                result.push(self.eval_expr(m, &ext_columns, &ext_row)?);
+                            } else {
+                                result.push(item.clone());
+                            }
+                        }
+                        Ok(Value::List(result))
+                    }
+                    Value::Null => Ok(Value::Null),
+                    _ => Err(GqliteError::Execution("list comprehension requires a list".into())),
+                }
+            }
         }
     }
 }

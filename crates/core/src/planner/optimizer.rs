@@ -418,6 +418,15 @@ fn collect_expr_aliases(expr: &Expr, aliases: &mut Vec<String>) {
         Expr::Exists(_) => {
             // EXISTS subquery has its own scope; don't collect inner aliases.
         }
+        Expr::ListComprehension { list, filter, map_expr, .. } => {
+            collect_expr_aliases(list, aliases);
+            if let Some(f) = filter {
+                collect_expr_aliases(f, aliases);
+            }
+            if let Some(m) = map_expr {
+                collect_expr_aliases(m, aliases);
+            }
+        }
         _ => {}
     }
 }
@@ -555,6 +564,15 @@ fn collect_expr_columns(expr: &Expr, cols: &mut Vec<ColumnRef>) {
         }
         Expr::Exists(_) => {
             // EXISTS subquery has its own scope; don't collect inner columns.
+        }
+        Expr::ListComprehension { list, filter, map_expr, .. } => {
+            collect_expr_columns(list, cols);
+            if let Some(f) = filter {
+                collect_expr_columns(f, cols);
+            }
+            if let Some(m) = map_expr {
+                collect_expr_columns(m, cols);
+            }
         }
         _ => {}
     }

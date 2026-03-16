@@ -352,6 +352,13 @@ pub enum Expr {
     },
     /// EXISTS { subquery } — evaluates to true if the subquery returns at least one row.
     Exists(Box<QueryStatement>),
+    /// List comprehension: [variable IN list WHERE filter | map_expr]
+    ListComprehension {
+        variable: String,
+        list: Box<Expr>,
+        filter: Option<Box<Expr>>,
+        map_expr: Option<Box<Expr>>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
