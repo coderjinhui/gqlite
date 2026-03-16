@@ -3,7 +3,7 @@
 //! The physical plan specifies concrete algorithms (e.g., sequential scan,
 //! hash join) that the execution engine will run.
 
-use crate::parser::ast::{AlterTableAction, Direction, Expr, OrderByItem};
+use crate::parser::ast::{AlterTableAction, Direction, Expr, OrderByItem, QueryStatement};
 use crate::planner::logical::{BoundSetItem, JoinKey};
 use crate::types::data_type::DataType;
 
@@ -202,6 +202,12 @@ pub enum PhysicalPlan {
         on_create: Vec<(usize, Expr)>,
         on_match: Vec<(usize, Expr)>,
     },
+
+    /// Execute a subquery and concatenate/cross-join results with input.
+    CallSubquery {
+        input: Box<PhysicalPlan>,
+        subquery: QueryStatement,
+    },
 }
 
 impl PhysicalPlan {
@@ -223,6 +229,8 @@ impl PhysicalPlan {
             | PhysicalPlan::Union { .. }
             | PhysicalPlan::Unwind { .. }
             | PhysicalPlan::EmptyResult => true,
+
+            PhysicalPlan::CallSubquery { input, .. } => input.is_read_only(),
 
             PhysicalPlan::InsertNode { .. }
             | PhysicalPlan::InsertRel { .. }
@@ -508,6 +516,11 @@ pub fn to_physical(
             properties: properties.clone(),
             on_create: on_create.clone(),
             on_match: on_match.clone(),
+        },
+
+        LogicalOperator::CallSubquery { input, subquery } => PhysicalPlan::CallSubquery {
+            input: Box::new(to_physical(input)),
+            subquery: subquery.clone(),
         },
     }
 }

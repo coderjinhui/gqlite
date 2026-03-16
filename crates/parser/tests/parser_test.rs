@@ -633,3 +633,40 @@ fn call_dotted_name_three_parts() {
     assert_eq!(procedure, "a.b.c");
 }
 
+#[test]
+fn call_subquery_basic() {
+    let stmt = parse("CALL { MATCH (n:Person) RETURN n.name AS name } RETURN name");
+    let Statement::Query(q) = stmt else {
+        panic!("expected query");
+    };
+    assert_eq!(q.clauses.len(), 2); // CallSubquery + Return
+    let Clause::CallSubquery(sub) = &q.clauses[0] else {
+        panic!("expected CallSubquery clause");
+    };
+    assert_eq!(sub.clauses.len(), 2); // Match + Return
+    assert!(matches!(&sub.clauses[0], Clause::Match(_)));
+    assert!(matches!(&sub.clauses[1], Clause::Return(_)));
+    assert!(matches!(&q.clauses[1], Clause::Return(_)));
+}
+
+#[test]
+fn call_subquery_with_preceding_match() {
+    let stmt = parse("MATCH (a:Person) CALL { MATCH (b:Person) RETURN count(b) AS total } RETURN a.name, total");
+    let Statement::Query(q) = stmt else {
+        panic!("expected query");
+    };
+    assert_eq!(q.clauses.len(), 3); // Match + CallSubquery + Return
+    assert!(matches!(&q.clauses[0], Clause::Match(_)));
+    let Clause::CallSubquery(sub) = &q.clauses[1] else {
+        panic!("expected CallSubquery clause");
+    };
+    assert_eq!(sub.clauses.len(), 2); // Match + Return
+    assert!(matches!(&q.clauses[2], Clause::Return(_)));
+}
+
+#[test]
+fn call_subquery_empty_body_errors() {
+    let err = parse_err("CALL { } RETURN 1");
+    assert!(err.contains("expected clauses inside CALL { ... }"));
+}
+

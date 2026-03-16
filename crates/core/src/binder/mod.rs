@@ -199,6 +199,35 @@ impl<'a> Binder<'a> {
                         on_match: m.on_match.clone(),
                     }));
                 }
+                Clause::CallSubquery(sub_query) => {
+                    // The inner subquery has its own scope; pass through for
+                    // binding at execution time (like EXISTS).
+                    // But we need to register output columns in the outer scope
+                    // so that subsequent clauses can reference them.
+                    for clause in &sub_query.clauses {
+                        if let Clause::Return(ret) = clause {
+                            for item in &ret.items {
+                                // Use alias if present, otherwise derive from expr
+                                let col_name = if let Some(ref alias) = item.alias {
+                                    alias.clone()
+                                } else {
+                                    match &item.expr {
+                                        Expr::Ident(name) => name.clone(),
+                                        Expr::Property(_, field) => field.clone(),
+                                        Expr::FunctionCall { name, .. } => name.clone(),
+                                        _ => continue,
+                                    }
+                                };
+                                self.scope.define(BoundVariable {
+                                    name: col_name,
+                                    table_id: None,
+                                    var_type: BoundVarType::Node { label: None },
+                                });
+                            }
+                        }
+                    }
+                    bound_clauses.push(BoundClause::CallSubquery(sub_query.clone()));
+                }
             }
         }
 
@@ -534,6 +563,7 @@ pub enum BoundClause {
     Skip(Expr),
     Unwind { expr: Expr, alias: String },
     Merge(BoundMerge),
+    CallSubquery(QueryStatement),
 }
 
 #[derive(Debug, Clone)]

@@ -47,6 +47,8 @@ pub enum Clause {
     Delete(DeleteClause),
     Unwind(UnwindClause),
     Merge(MergeClause),
+    /// CALL { subquery } — execute an inner query and pipe results into the outer query.
+    CallSubquery(QueryStatement),
 }
 
 // ── MATCH ───────────────────────────────────────────────────────

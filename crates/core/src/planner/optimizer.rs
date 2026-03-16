@@ -140,6 +140,10 @@ fn push_filters_down(plan: LogicalOperator) -> LogicalOperator {
             detach,
             variables,
         },
+        LogicalOperator::CallSubquery { input, subquery } => LogicalOperator::CallSubquery {
+            input: Box::new(push_filters_down(*input)),
+            subquery,
+        },
         // Leaf / DDL nodes — nothing to optimize.
         other => other,
     }
@@ -344,7 +348,8 @@ fn collect_aliases_recursive(plan: &LogicalOperator, aliases: &mut Vec<String>) 
         | LogicalOperator::Aggregate { input, .. }
         | LogicalOperator::SetProperty { input, .. }
         | LogicalOperator::InsertRel { input, .. }
-        | LogicalOperator::Delete { input, .. } => {
+        | LogicalOperator::Delete { input, .. }
+        | LogicalOperator::CallSubquery { input, .. } => {
             collect_aliases_recursive(input, aliases);
         }
         LogicalOperator::HashJoin { build, probe, .. } => {
@@ -510,6 +515,10 @@ fn collect_required_recursive(plan: &LogicalOperator, cols: &mut Vec<ColumnRef>)
         }
         LogicalOperator::Delete { input, .. }
         | LogicalOperator::InsertRel { input, .. } => {
+            collect_required_recursive(input, cols);
+        }
+        LogicalOperator::CallSubquery { input, .. } => {
+            // Subquery has its own scope; only collect from input.
             collect_required_recursive(input, cols);
         }
         _ => {}
@@ -716,6 +725,10 @@ fn apply_projection_pushdown(
         } => LogicalOperator::Aggregate {
             input: Box::new(apply_projection_pushdown(*input, required)),
             expressions,
+        },
+        LogicalOperator::CallSubquery { input, subquery } => LogicalOperator::CallSubquery {
+            input: Box::new(apply_projection_pushdown(*input, required)),
+            subquery,
         },
         other => other,
     }

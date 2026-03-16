@@ -31,7 +31,15 @@ impl Parser {
         }
 
         let stmt = match self.peek() {
-            Token::Call => self.parse_call_statement(),
+            Token::Call => {
+                // CALL { subquery } → parse as query clause
+                // CALL procedure_name(...) → parse as procedure call
+                if self.peek_at(1) == &Token::LBrace {
+                    self.parse_query_statement()
+                } else {
+                    self.parse_call_statement()
+                }
+            }
             Token::Create => {
                 // Peek ahead: CREATE NODE TABLE / CREATE REL TABLE / CREATE (pattern)
                 if self.peek_at(1) == &Token::Node && self.peek_at(2) == &Token::Table {
@@ -110,6 +118,46 @@ impl Parser {
         Ok(Statement::Call { procedure: name, args, yields })
     }
 
+    /// Parse `CALL { <inner clauses> }` as a Clause.
+    fn parse_call_subquery_clause(&mut self) -> Result<Clause, ParseError> {
+        self.expect(&Token::Call)?;
+        self.expect(&Token::LBrace)?;
+
+        let mut inner_clauses = Vec::new();
+        loop {
+            match self.peek() {
+                Token::Match | Token::Optional => inner_clauses.push(self.parse_match_clause()?),
+                Token::Where => inner_clauses.push(self.parse_where_clause()?),
+                Token::Return => inner_clauses.push(self.parse_return_clause()?),
+                Token::With => inner_clauses.push(self.parse_with_clause()?),
+                Token::Order => inner_clauses.push(self.parse_order_by_clause()?),
+                Token::Limit => inner_clauses.push(self.parse_limit_clause()?),
+                Token::Skip => inner_clauses.push(self.parse_skip_clause()?),
+                Token::Create => inner_clauses.push(self.parse_create_clause()?),
+                Token::Set => inner_clauses.push(self.parse_set_clause()?),
+                Token::Delete | Token::Detach => inner_clauses.push(self.parse_delete_clause()?),
+                Token::Unwind => inner_clauses.push(self.parse_unwind_clause()?),
+                Token::Merge => inner_clauses.push(self.parse_merge_clause()?),
+                Token::Call => {
+                    if self.peek_at(1) == &Token::LBrace {
+                        inner_clauses.push(self.parse_call_subquery_clause()?);
+                    } else {
+                        break;
+                    }
+                }
+                _ => break,
+            }
+        }
+
+        self.expect(&Token::RBrace)?;
+
+        if inner_clauses.is_empty() {
+            return Err(self.error("expected clauses inside CALL { ... }"));
+        }
+
+        Ok(Clause::CallSubquery(QueryStatement { clauses: inner_clauses }))
+    }
+
     // ── Query Statement ─────────────────────────────────────────
 
     fn parse_query_statement(&mut self) -> Result<Statement, ParseError> {
@@ -129,6 +177,14 @@ impl Parser {
                 Token::Delete | Token::Detach => clauses.push(self.parse_delete_clause()?),
                 Token::Unwind => clauses.push(self.parse_unwind_clause()?),
                 Token::Merge => clauses.push(self.parse_merge_clause()?),
+                Token::Call => {
+                    // CALL { subquery } inside a query
+                    if self.peek_at(1) == &Token::LBrace {
+                        clauses.push(self.parse_call_subquery_clause()?);
+                    } else {
+                        break; // Let top-level handle CALL procedure
+                    }
+                }
                 _ => break,
             }
         }

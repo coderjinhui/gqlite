@@ -212,6 +212,12 @@ pub enum LogicalOperator {
         header: bool,
         delimiter: char,
     },
+
+    /// Execute a subquery and concatenate/cross-join results with input.
+    CallSubquery {
+        input: Box<LogicalOperator>,
+        subquery: QueryStatement,
+    },
 }
 
 /// Source for COPY TO operation.
@@ -613,6 +619,24 @@ impl<'a> Planner<'a> {
                             }
                         }
                     }
+                }
+                BoundClause::CallSubquery(sub) => {
+                    // Apply pending filter before subquery
+                    if let Some(predicate) = pending_filter.take() {
+                        if let Some(input) = current_plan.take() {
+                            current_plan = Some(LogicalOperator::Filter {
+                                input: Box::new(input),
+                                predicate,
+                            });
+                        }
+                    }
+                    let input = current_plan
+                        .take()
+                        .unwrap_or(LogicalOperator::EmptyResult);
+                    current_plan = Some(LogicalOperator::CallSubquery {
+                        input: Box::new(input),
+                        subquery: sub.clone(),
+                    });
                 }
             }
         }

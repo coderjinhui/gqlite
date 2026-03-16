@@ -712,6 +712,10 @@ impl Engine {
                 on_match,
             } => self.exec_merge(db, table_name, *table_id, properties, on_create, on_match, txn_id),
 
+            PhysicalPlan::CallSubquery { input, subquery } => {
+                self.exec_call_subquery(input, subquery, db, txn_id)
+            }
+
             // DDL handled in execute_plan
             PhysicalPlan::CreateNodeTable { .. }
             | PhysicalPlan::CreateRelTable { .. }
@@ -1997,6 +2001,45 @@ impl Engine {
             types: out_types,
             rows: out_rows,
         })
+    }
+
+    // ── CallSubquery ──────────────────────────────────────────────
+
+    pub(crate) fn exec_call_subquery(
+        &self,
+        input: &PhysicalPlan,
+        subquery: &QueryStatement,
+        db: &Arc<DatabaseInner>,
+        txn_id: u64,
+    ) -> Result<Intermediate, GqliteError> {
+        let input_result = self.execute_operator(input, db, txn_id)?;
+
+        // Execute the subquery through the full pipeline (bind → plan → execute)
+        let sub_result = {
+            let catalog = db.catalog.read().unwrap();
+            let mut binder = Binder::new(&catalog);
+            let bound = binder.bind(&Statement::Query(subquery.clone()))?;
+            let planner = Planner::new(&catalog);
+            let logical = planner.plan(&bound)?;
+            let logical = optimizer::optimize(logical);
+            let physical_plan = physical::to_physical(&logical);
+            drop(catalog);
+
+            let mut sub_engine = Engine::with_snapshot(self.start_ts, self.params.clone());
+            if let Some(ref db_arc) = self.db {
+                sub_engine.set_db(db_arc.clone());
+            }
+            sub_engine.execute_operator(&physical_plan, db, txn_id)?
+        };
+
+        // If input is trivial (EmptyResult → no columns and no rows),
+        // return the subquery results directly.
+        if input_result.columns.is_empty() || input_result.rows.is_empty() {
+            return Ok(sub_result);
+        }
+
+        // Cross-join: for each input row, pair with each subquery row
+        self.exec_cross_join(input_result, sub_result)
     }
 
     // ── Merge (upsert) ─────────────────────────────────────────
