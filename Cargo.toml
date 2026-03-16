@@ -18,4 +18,5 @@ logos = "0.14"
 ahash = "0.8"
 parking_lot = "0.12"
 crc32fast = "1"
+rayon = "1"
 gqlite-core = { path = "crates/core" }

@@ -16,3 +16,4 @@ logos = { workspace = true }
 ahash = { workspace = true }
 parking_lot = { workspace = true }
 crc32fast = { workspace = true }
+rayon = { workspace = true }
