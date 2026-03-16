@@ -1,4 +1,4 @@
-mod helper;
+use gqlite_cli::helper;
 
 use std::path::PathBuf;
 use std::time::Instant;

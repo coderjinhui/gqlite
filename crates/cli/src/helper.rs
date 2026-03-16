@@ -42,7 +42,7 @@ impl Highlighter for GqliteHelper {
 }
 
 impl GqliteHelper {
-    fn find_matches(line: &str, pos: usize) -> (usize, Vec<String>) {
+    pub fn find_matches(line: &str, pos: usize) -> (usize, Vec<String>) {
         let text = &line[..pos];
 
         if text.starts_with('.') {
@@ -62,6 +62,9 @@ impl GqliteHelper {
             .unwrap_or(0);
 
         let word = &text[word_start..];
+        if word.is_empty() {
+            return (word_start, vec![]);
+        }
         let upper = word.to_uppercase();
 
         let matches: Vec<String> = CYPHER_KEYWORDS
