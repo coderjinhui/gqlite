@@ -1,3 +1,5 @@
+use serde::{Deserialize, Serialize};
+
 use crate::error::GqliteError;
 use crate::storage::column_chunk::ColumnChunk;
 use crate::storage::format::{CHUNK_CAPACITY, NODE_GROUP_SIZE};
@@ -6,6 +8,7 @@ use crate::types::value::Value;
 
 /// A single chunk within a NodeGroup, holding up to CHUNK_CAPACITY (2048) rows.
 /// Each column has its own ColumnChunk.
+#[derive(Serialize, Deserialize)]
 pub struct ChunkedNodeGroup {
     columns: Vec<ColumnChunk>,
     num_rows: u64,
@@ -96,6 +99,7 @@ impl ChunkedNodeGroup {
 
 /// A NodeGroup manages up to NODE_GROUP_SIZE (131072) rows, split into chunks of
 /// CHUNK_CAPACITY (2048) each. This is the primary unit of storage for a node table.
+#[derive(Serialize, Deserialize)]
 pub struct NodeGroup {
     group_idx: u32,
     chunks: Vec<ChunkedNodeGroup>,

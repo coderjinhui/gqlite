@@ -319,181 +319,224 @@ pub fn replay_wal(
         if !committed.contains(&record.txn_id) {
             continue; // skip uncommitted
         }
-        match &record.payload {
-            WalPayload::CreateNodeTable {
-                name,
-                columns,
-                primary_key,
-            } => {
-                let col_defs: Vec<ColumnDef> = columns
-                    .iter()
-                    .enumerate()
-                    .map(|(i, (cname, dtype))| ColumnDef {
-                        column_id: i as u32,
-                        name: cname.clone(),
-                        data_type: dtype.clone(),
-                        nullable: cname != primary_key,
-                    })
-                    .collect();
-                let table_id = catalog.create_node_table(name, col_defs, primary_key)?;
-                let entry = catalog.get_node_table(name).unwrap().clone();
-                storage.node_tables.insert(table_id, NodeTable::new(&entry));
-            }
-
-            WalPayload::CreateRelTable {
-                name,
-                from_table,
-                to_table,
-                columns,
-            } => {
-                let col_defs: Vec<ColumnDef> = columns
-                    .iter()
-                    .enumerate()
-                    .map(|(i, (cname, dtype))| ColumnDef {
-                        column_id: i as u32,
-                        name: cname.clone(),
-                        data_type: dtype.clone(),
-                        nullable: true,
-                    })
-                    .collect();
-                let table_id =
-                    catalog.create_rel_table(name, from_table, to_table, col_defs)?;
-                let entry = catalog.get_rel_table(name).unwrap().clone();
-                storage.rel_tables.insert(table_id, RelTable::new(&entry));
-            }
-
-            WalPayload::DropTable { name } => {
-                let table_id = catalog
-                    .get_node_table(name)
-                    .map(|e| e.table_id)
-                    .or_else(|| catalog.get_rel_table(name).map(|e| e.table_id));
-                catalog.drop_table(name)?;
-                if let Some(id) = table_id {
-                    storage.node_tables.remove(&id);
-                    storage.rel_tables.remove(&id);
-                }
-            }
-
-            WalPayload::InsertNode {
-                table_id, values, ..
-            } => {
-                if let Some(nt) = storage.node_tables.get_mut(table_id) {
-                    nt.insert(values, record.txn_id)?;
-                }
-            }
-
-            WalPayload::InsertRel {
-                rel_table_id,
-                src,
-                dst,
-                properties,
-                ..
-            } => {
-                if let Some(rt) = storage.rel_tables.get_mut(rel_table_id) {
-                    rt.insert_rel(*src, *dst, properties)?;
-                    rt.compact();
-                }
-            }
-
-            WalPayload::UpdateProperty {
-                table_id,
-                node_offset,
-                col_idx,
-                new_value,
-            } => {
-                if let Some(nt) = storage.node_tables.get_mut(table_id) {
-                    nt.update(*node_offset, *col_idx, new_value.clone())?;
-                }
-            }
-
-            WalPayload::DeleteNode {
-                table_id,
-                node_offset,
-            } => {
-                if let Some(nt) = storage.node_tables.get_mut(table_id) {
-                    nt.delete(*node_offset, record.txn_id)?;
-                }
-            }
-
-            WalPayload::AlterTableAddColumn {
-                table_name,
-                col_name,
-                data_type,
-            } => {
-                let col_id = catalog
-                    .get_node_table(table_name)
-                    .map(|e| e.columns.len() as u32)
-                    .or_else(|| catalog.get_rel_table(table_name).map(|e| e.columns.len() as u32))
-                    .unwrap_or(0);
-                let col_def = ColumnDef {
-                    column_id: col_id,
-                    name: col_name.clone(),
-                    data_type: data_type.clone(),
-                    nullable: true,
-                };
-                let is_node = catalog.get_node_table(table_name).is_some();
-                if is_node {
-                    catalog.add_column_to_node_table(table_name, col_def)?;
-                    let table_id = catalog.get_node_table(table_name).unwrap().table_id;
-                    if let Some(nt) = storage.node_tables.get_mut(&table_id) {
-                        nt.add_column(data_type);
-                    }
-                } else {
-                    catalog.add_column_to_rel_table(table_name, col_def)?;
-                }
-            }
-
-            WalPayload::AlterTableDropColumn {
-                table_name,
-                col_name,
-            } => {
-                let is_node = catalog.get_node_table(table_name).is_some();
-                if is_node {
-                    let col_idx = catalog
-                        .get_node_table(table_name)
-                        .unwrap()
-                        .columns
-                        .iter()
-                        .position(|c| c.name == *col_name);
-                    catalog.drop_column_from_node_table(table_name, col_name)?;
-                    if let Some(idx) = col_idx {
-                        let table_id = catalog.get_node_table(table_name).unwrap().table_id;
-                        if let Some(nt) = storage.node_tables.get_mut(&table_id) {
-                            nt.drop_column(idx);
-                        }
-                    }
-                } else {
-                    catalog.drop_column_from_rel_table(table_name, col_name)?;
-                }
-            }
-
-            WalPayload::AlterTableRenameTable {
-                old_name,
-                new_name,
-            } => {
-                catalog.rename_table(old_name, new_name)?;
-            }
-
-            WalPayload::AlterTableRenameColumn {
-                table_name,
-                old_col,
-                new_col,
-            } => {
-                let is_node = catalog.get_node_table(table_name).is_some();
-                if is_node {
-                    catalog.rename_column_in_node_table(table_name, old_col, new_col)?;
-                } else {
-                    catalog.rename_column_in_rel_table(table_name, old_col, new_col)?;
-                }
-            }
-
-            WalPayload::TxnCommit => {
-                // No-op during replay — just a marker
-            }
-        }
+        replay_single_record(record, catalog, storage)?;
     }
 
     Ok(max_committed)
+}
+
+/// Replay only WAL records with `txn_id > checkpoint_ts` (incremental recovery).
+///
+/// Used when recovering from a `.graph` main file + WAL: the main file already
+/// contains state up to `checkpoint_ts`, so only newer records are needed.
+pub fn replay_wal_incremental(
+    records: &[WalRecord],
+    catalog: &mut Catalog,
+    storage: &mut Storage,
+    checkpoint_ts: u64,
+) -> Result<u64, GqliteError> {
+    // Find committed transaction IDs with txn_id > checkpoint_ts
+    let committed: std::collections::HashSet<u64> = records
+        .iter()
+        .filter(|r| matches!(r.payload, WalPayload::TxnCommit) && r.txn_id > checkpoint_ts)
+        .map(|r| r.txn_id)
+        .collect();
+
+    let max_committed = committed.iter().copied().max().unwrap_or(0);
+
+    for record in records {
+        if record.txn_id <= checkpoint_ts {
+            continue; // already in main file
+        }
+        if !committed.contains(&record.txn_id) {
+            continue; // uncommitted
+        }
+        replay_single_record(record, catalog, storage)?;
+    }
+
+    Ok(max_committed)
+}
+
+/// Replay a single WAL record against catalog + storage.
+fn replay_single_record(
+    record: &WalRecord,
+    catalog: &mut Catalog,
+    storage: &mut Storage,
+) -> Result<(), GqliteError> {
+    match &record.payload {
+        WalPayload::CreateNodeTable {
+            name,
+            columns,
+            primary_key,
+        } => {
+            let col_defs: Vec<ColumnDef> = columns
+                .iter()
+                .enumerate()
+                .map(|(i, (cname, dtype))| ColumnDef {
+                    column_id: i as u32,
+                    name: cname.clone(),
+                    data_type: dtype.clone(),
+                    nullable: cname != primary_key,
+                })
+                .collect();
+            let table_id = catalog.create_node_table(name, col_defs, primary_key)?;
+            let entry = catalog.get_node_table(name).unwrap().clone();
+            storage.node_tables.insert(table_id, NodeTable::new(&entry));
+        }
+
+        WalPayload::CreateRelTable {
+            name,
+            from_table,
+            to_table,
+            columns,
+        } => {
+            let col_defs: Vec<ColumnDef> = columns
+                .iter()
+                .enumerate()
+                .map(|(i, (cname, dtype))| ColumnDef {
+                    column_id: i as u32,
+                    name: cname.clone(),
+                    data_type: dtype.clone(),
+                    nullable: true,
+                })
+                .collect();
+            let table_id =
+                catalog.create_rel_table(name, from_table, to_table, col_defs)?;
+            let entry = catalog.get_rel_table(name).unwrap().clone();
+            storage.rel_tables.insert(table_id, RelTable::new(&entry));
+        }
+
+        WalPayload::DropTable { name } => {
+            let table_id = catalog
+                .get_node_table(name)
+                .map(|e| e.table_id)
+                .or_else(|| catalog.get_rel_table(name).map(|e| e.table_id));
+            catalog.drop_table(name)?;
+            if let Some(id) = table_id {
+                storage.node_tables.remove(&id);
+                storage.rel_tables.remove(&id);
+            }
+        }
+
+        WalPayload::InsertNode {
+            table_id, values, ..
+        } => {
+            if let Some(nt) = storage.node_tables.get_mut(table_id) {
+                nt.insert(values, record.txn_id)?;
+            }
+        }
+
+        WalPayload::InsertRel {
+            rel_table_id,
+            src,
+            dst,
+            properties,
+            ..
+        } => {
+            if let Some(rt) = storage.rel_tables.get_mut(rel_table_id) {
+                rt.insert_rel(*src, *dst, properties)?;
+                rt.compact();
+            }
+        }
+
+        WalPayload::UpdateProperty {
+            table_id,
+            node_offset,
+            col_idx,
+            new_value,
+        } => {
+            if let Some(nt) = storage.node_tables.get_mut(table_id) {
+                nt.update(*node_offset, *col_idx, new_value.clone())?;
+            }
+        }
+
+        WalPayload::DeleteNode {
+            table_id,
+            node_offset,
+        } => {
+            if let Some(nt) = storage.node_tables.get_mut(table_id) {
+                nt.delete(*node_offset, record.txn_id)?;
+            }
+        }
+
+        WalPayload::AlterTableAddColumn {
+            table_name,
+            col_name,
+            data_type,
+        } => {
+            let col_id = catalog
+                .get_node_table(table_name)
+                .map(|e| e.columns.len() as u32)
+                .or_else(|| catalog.get_rel_table(table_name).map(|e| e.columns.len() as u32))
+                .unwrap_or(0);
+            let col_def = ColumnDef {
+                column_id: col_id,
+                name: col_name.clone(),
+                data_type: data_type.clone(),
+                nullable: true,
+            };
+            let is_node = catalog.get_node_table(table_name).is_some();
+            if is_node {
+                catalog.add_column_to_node_table(table_name, col_def)?;
+                let table_id = catalog.get_node_table(table_name).unwrap().table_id;
+                if let Some(nt) = storage.node_tables.get_mut(&table_id) {
+                    nt.add_column(data_type);
+                }
+            } else {
+                catalog.add_column_to_rel_table(table_name, col_def)?;
+            }
+        }
+
+        WalPayload::AlterTableDropColumn {
+            table_name,
+            col_name,
+        } => {
+            let is_node = catalog.get_node_table(table_name).is_some();
+            if is_node {
+                let col_idx = catalog
+                    .get_node_table(table_name)
+                    .unwrap()
+                    .columns
+                    .iter()
+                    .position(|c| c.name == *col_name);
+                catalog.drop_column_from_node_table(table_name, col_name)?;
+                if let Some(idx) = col_idx {
+                    let table_id = catalog.get_node_table(table_name).unwrap().table_id;
+                    if let Some(nt) = storage.node_tables.get_mut(&table_id) {
+                        nt.drop_column(idx);
+                    }
+                }
+            } else {
+                catalog.drop_column_from_rel_table(table_name, col_name)?;
+            }
+        }
+
+        WalPayload::AlterTableRenameTable {
+            old_name,
+            new_name,
+        } => {
+            catalog.rename_table(old_name, new_name)?;
+        }
+
+        WalPayload::AlterTableRenameColumn {
+            table_name,
+            old_col,
+            new_col,
+        } => {
+            let is_node = catalog.get_node_table(table_name).is_some();
+            if is_node {
+                catalog.rename_column_in_node_table(table_name, old_col, new_col)?;
+            } else {
+                catalog.rename_column_in_rel_table(table_name, old_col, new_col)?;
+            }
+        }
+
+        WalPayload::TxnCommit => {
+            // No-op during replay — just a marker
+        }
+    }
+
+    Ok(())
 }
 
 /// Return the WAL path for a given database path.

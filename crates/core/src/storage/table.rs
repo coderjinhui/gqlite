@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 
+use serde::{Deserialize, Serialize};
+
 use crate::catalog::{NodeTableEntry, RelTableEntry};
 use crate::error::GqliteError;
 use crate::storage::csr::{CSRNodeGroup, PendingEdge};
@@ -12,6 +14,7 @@ use crate::types::value::Value;
 // ── NodeTable ──────────────────────────────────────────────────────
 
 /// Manages all rows for a single node table, organized into NodeGroups.
+#[derive(Serialize, Deserialize)]
 pub struct NodeTable {
     table_id: u32,
     schema: Vec<(String, DataType)>,
@@ -303,6 +306,7 @@ impl<'a> Iterator for NodeTableIter<'a> {
 
 /// Manages relationship storage using CSR format with bidirectional indexing.
 #[allow(dead_code)]
+#[derive(Serialize, Deserialize)]
 pub struct RelTable {
     table_id: u32,
     src_table_id: u32,

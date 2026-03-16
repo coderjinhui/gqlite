@@ -19,6 +19,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 
 use parking_lot::Mutex;
+use serde::{Deserialize, Serialize};
 
 use error::GqliteError;
 use types::data_type::DataType;
@@ -37,6 +38,7 @@ use transaction::wal::{WalPayload, WalRecord, WalWriter};
 // ── Storage ─────────────────────────────────────────────────────
 
 /// Manages in-memory storage for all node and relationship tables.
+#[derive(Serialize, Deserialize)]
 pub struct Storage {
     pub node_tables: HashMap<u32, NodeTable>,
     pub rel_tables: HashMap<u32, RelTable>,
@@ -48,6 +50,92 @@ impl Storage {
             node_tables: HashMap::new(),
             rel_tables: HashMap::new(),
         }
+    }
+
+    /// Serialize the storage to bytes using bincode.
+    pub fn to_bytes(&self) -> Result<Vec<u8>, GqliteError> {
+        bincode::serialize(self)
+            .map_err(|e| GqliteError::Storage(format!("storage serialize error: {}", e)))
+    }
+
+    /// Deserialize storage from bincode bytes.
+    pub fn from_bytes(data: &[u8]) -> Result<Self, GqliteError> {
+        bincode::deserialize(data)
+            .map_err(|e| GqliteError::Storage(format!("storage deserialize error: {}", e)))
+    }
+
+    /// Persist the storage into the pager starting at `start_page`.
+    ///
+    /// Format: first 8 bytes = total length (u64 LE), then the bincode payload.
+    /// If the data exceeds one page, it spans consecutive pages.
+    pub fn save_to(
+        &self,
+        pager: &mut storage::pager::Pager,
+        start_page: storage::pager::PageId,
+    ) -> Result<(), GqliteError> {
+        let payload = self.to_bytes()?;
+        let total_len = payload.len() as u64;
+        let page_size = pager.page_size() as usize;
+
+        // Build the full byte stream: 8-byte length prefix + payload
+        let mut stream = Vec::with_capacity(8 + payload.len());
+        stream.extend_from_slice(&total_len.to_le_bytes());
+        stream.extend_from_slice(&payload);
+
+        // Calculate how many pages we need
+        let pages_needed = (stream.len() + page_size - 1) / page_size;
+
+        // Ensure we have enough pages allocated
+        while pager.page_count() < start_page + pages_needed as u64 {
+            pager.allocate_page()?;
+        }
+
+        // Write page by page
+        for i in 0..pages_needed {
+            let page_id = start_page + i as u64;
+            let start = i * page_size;
+            let end = std::cmp::min(start + page_size, stream.len());
+
+            let mut page_buf = vec![0u8; page_size];
+            page_buf[..end - start].copy_from_slice(&stream[start..end]);
+            pager.write_page(page_id, &page_buf)?;
+        }
+
+        Ok(())
+    }
+
+    /// Load the storage from the pager starting at `start_page`.
+    pub fn load_from(
+        pager: &storage::pager::Pager,
+        start_page: storage::pager::PageId,
+    ) -> Result<Self, GqliteError> {
+        let page_size = pager.page_size() as usize;
+
+        // Read first page to get the total length
+        let mut first_page = vec![0u8; page_size];
+        pager.read_page(start_page, &mut first_page)?;
+
+        let total_len =
+            u64::from_le_bytes(first_page[0..8].try_into().unwrap()) as usize;
+        let total_with_header = 8 + total_len;
+        let pages_needed = (total_with_header + page_size - 1) / page_size;
+
+        // Accumulate all bytes
+        let mut stream = Vec::with_capacity(total_with_header);
+        stream.extend_from_slice(&first_page[..std::cmp::min(page_size, total_with_header)]);
+
+        for i in 1..pages_needed {
+            let page_id = start_page + i as u64;
+            let mut buf = vec![0u8; page_size];
+            pager.read_page(page_id, &mut buf)?;
+            let remaining = total_with_header - stream.len();
+            let take = std::cmp::min(page_size, remaining);
+            stream.extend_from_slice(&buf[..take]);
+        }
+
+        // Skip the 8-byte length prefix
+        let payload = &stream[8..8 + total_len];
+        Self::from_bytes(payload)
     }
 }
 
@@ -122,14 +210,61 @@ impl Database {
         let mut catalog = Catalog::new();
         let mut storage = Storage::new();
         let mut max_committed_id = 0u64;
+        let mut checkpoint_ts = 0u64;
 
-        // Recovery: replay WAL if it exists
+        // Phase 1: Load from .graph main file if it exists and is valid
+        if path.exists() {
+            match storage::pager::Pager::open(&path) {
+                Ok(pager) => {
+                    let header = pager.header();
+                    if header.checkpoint_ts > 0 {
+                        // Try to load Catalog + Storage from main file
+                        match Catalog::load_from(&pager, header.catalog_page_idx) {
+                            Ok(loaded_catalog) => {
+                                match Storage::load_from(&pager, header.storage_page_idx) {
+                                    Ok(loaded_storage) => {
+                                        catalog = loaded_catalog;
+                                        storage = loaded_storage;
+                                        checkpoint_ts = header.checkpoint_ts;
+                                        max_committed_id = checkpoint_ts;
+                                    }
+                                    Err(_) => {
+                                        // Fallback: ignore main file, rely on WAL
+                                        catalog = Catalog::new();
+                                        storage = Storage::new();
+                                    }
+                                }
+                            }
+                            Err(_) => {
+                                // Fallback: ignore main file, rely on WAL
+                            }
+                        }
+                    }
+                }
+                Err(_) => {
+                    // .graph file exists but can't be opened — ignore, rely on WAL
+                }
+            }
+        }
+
+        // Phase 2: Replay WAL (incremental if we loaded from main file)
         if wal_path.exists() {
             let mut reader = transaction::wal::WalReader::open(&wal_path)?;
             let records = reader.read_all()?;
             if !records.is_empty() {
-                max_committed_id =
-                    transaction::wal::replay_wal(&records, &mut catalog, &mut storage)?;
+                let wal_max = if checkpoint_ts > 0 {
+                    transaction::wal::replay_wal_incremental(
+                        &records,
+                        &mut catalog,
+                        &mut storage,
+                        checkpoint_ts,
+                    )?
+                } else {
+                    transaction::wal::replay_wal(&records, &mut catalog, &mut storage)?
+                };
+                if wal_max > max_committed_id {
+                    max_committed_id = wal_max;
+                }
             }
         }
 
@@ -225,11 +360,9 @@ impl Database {
         None
     }
 
-    /// Checkpoint: flush the current WAL state and clear it.
+    /// Checkpoint: serialize Catalog + Storage to `.graph` main file, then clear WAL.
     ///
-    /// After checkpoint, the WAL only contains the complete set of operations
-    /// needed to rebuild the database from scratch (a fresh snapshot).
-    /// This avoids an ever-growing WAL file.
+    /// Crash-safe: writes to `.graph.tmp` first, then atomically renames.
     pub fn checkpoint(&self) -> Result<(), GqliteError> {
         let mut wal_guard = self.inner.wal.lock();
         let wal = match wal_guard.as_mut() {
@@ -237,97 +370,50 @@ impl Database {
             None => return Ok(()), // in-memory — nothing to do
         };
 
-        // Build a fresh WAL that represents the current state
-        wal.clear()?;
-
         let catalog = self.inner.catalog.read().unwrap();
-        let storage = self.inner.storage.read().unwrap();
-        let txn_id = self.inner.txn_manager.last_committed_id() + 1;
+        let storage_guard = self.inner.storage.read().unwrap();
+        let checkpoint_ts = self.inner.txn_manager.last_committed_id();
 
-        // Write DDL for all node tables
-        for entry in catalog.node_tables() {
-            let columns: Vec<(String, DataType)> = entry
-                .columns
-                .iter()
-                .map(|c| (c.name.clone(), c.data_type.clone()))
-                .collect();
-            let pk_name = entry.columns[entry.primary_key_idx].name.clone();
-            wal.append(&WalRecord {
-                txn_id,
-                payload: WalPayload::CreateNodeTable {
-                    name: entry.name.clone(),
-                    columns,
-                    primary_key: pk_name,
-                },
-            })?;
+        let db_path = &self.inner.path;
+        let tmp_path = db_path.with_extension("graph.tmp");
+
+        // Remove residual .graph.tmp from a previous crash
+        let _ = std::fs::remove_file(&tmp_path);
+
+        // Create the temporary main file
+        let mut pager = storage::pager::Pager::create(&tmp_path)?;
+
+        // Write Catalog starting at page 1
+        let catalog_start: storage::pager::PageId = 1;
+        catalog.save_to(&mut pager, catalog_start)?;
+
+        // Compute Storage start page = 1 + pages used by catalog
+        let catalog_bytes = catalog.to_bytes()?;
+        let page_size = pager.page_size() as usize;
+        let catalog_pages = (8 + catalog_bytes.len() + page_size - 1) / page_size;
+        let storage_start = catalog_start + catalog_pages as u64;
+
+        // Write Storage
+        storage_guard.save_to(&mut pager, storage_start)?;
+
+        // Update file header
+        {
+            let header = pager.header_mut();
+            header.catalog_page_idx = catalog_start;
+            header.storage_page_idx = storage_start;
+            header.checkpoint_ts = checkpoint_ts;
         }
+        pager.flush_header()?;
+        pager.sync()?;
 
-        // Write DDL for all rel tables
-        for entry in catalog.rel_tables() {
-            let columns: Vec<(String, DataType)> = entry
-                .columns
-                .iter()
-                .map(|c| (c.name.clone(), c.data_type.clone()))
-                .collect();
-            // Look up source/destination table names
-            let from_name = catalog
-                .get_node_table_by_id(entry.src_table_id)
-                .map(|e| e.name.clone())
-                .unwrap_or_default();
-            let to_name = catalog
-                .get_node_table_by_id(entry.dst_table_id)
-                .map(|e| e.name.clone())
-                .unwrap_or_default();
-            wal.append(&WalRecord {
-                txn_id,
-                payload: WalPayload::CreateRelTable {
-                    name: entry.name.clone(),
-                    from_table: from_name,
-                    to_table: to_name,
-                    columns,
-                },
-            })?;
-        }
+        // Drop pager to release file handle before rename
+        drop(pager);
 
-        // Write all node data
-        for (&table_id, node_table) in &storage.node_tables {
-            let entry = catalog.get_node_table_by_id(table_id);
-            let table_name = entry.map(|e| e.name.clone()).unwrap_or_default();
-            for (_offset, values) in node_table.scan() {
-                wal.append(&WalRecord {
-                    txn_id,
-                    payload: WalPayload::InsertNode {
-                        table_name: table_name.clone(),
-                        table_id,
-                        values,
-                    },
-                })?;
-            }
-        }
+        // Atomic rename: .graph.tmp → .graph
+        std::fs::rename(&tmp_path, db_path)?;
 
-        // Write all rel data
-        for (&table_id, rel_table) in &storage.rel_tables {
-            let entry = catalog.get_rel_table_by_id(table_id);
-            let rel_name = entry.map(|e| e.name.clone()).unwrap_or_default();
-            for (src, dst) in rel_table.all_edges() {
-                wal.append(&WalRecord {
-                    txn_id,
-                    payload: WalPayload::InsertRel {
-                        rel_table_name: rel_name.clone(),
-                        rel_table_id: table_id,
-                        src,
-                        dst,
-                        properties: vec![],
-                    },
-                })?;
-            }
-        }
-
-        // Commit marker
-        wal.append(&WalRecord {
-            txn_id,
-            payload: WalPayload::TxnCommit,
-        })?;
+        // Clear the WAL
+        wal.clear()?;
 
         Ok(())
     }

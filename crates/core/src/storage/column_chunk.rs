@@ -1,4 +1,5 @@
 use bitvec::prelude::*;
+use serde::{Deserialize, Serialize};
 
 use crate::error::GqliteError;
 use crate::storage::compression;
@@ -9,7 +10,7 @@ use crate::types::graph::InternalId;
 use crate::types::value::Value;
 
 /// Metadata for persisting/loading a ColumnChunk from disk.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ColumnChunkMetadata {
     /// Pages storing the data buffer.
     pub data_pages: Vec<PageId>,
@@ -29,6 +30,7 @@ pub struct ColumnChunkMetadata {
 ///
 /// Stores values in a raw byte buffer (for fixed-size types) or a Vec<String>
 /// (for variable-length strings). A null bitmap tracks which positions are NULL.
+#[derive(Serialize, Deserialize)]
 pub struct ColumnChunk {
     pub data_type: DataType,
     /// Raw bytes for fixed-size types (Bool/Int64/Double/InternalId).

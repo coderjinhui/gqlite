@@ -13,7 +13,7 @@ thiserror = "1"
 serde = { version = "1", features = ["derive"] }
 bincode = "1"
 uuid = { version = "1", features = ["v4"] }
-bitvec = "1"
+bitvec = { version = "1", features = ["serde"] }
 logos = "0.14"
 ahash = "0.8"
 parking_lot = "0.12"
