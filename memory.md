@@ -25,7 +25,7 @@ Query: GQL String
 | gqlite-core | `crates/core/` | 引擎核心：存储、规划、执行、事务（依赖 gqlite-parser） |
 | gqlite-cli | `crates/cli/` | 交互式 REPL (rustyline) |
 
-每个 crate 必须包含：`Cargo.toml` + `src/` + `tests/`
+每个 crate 必须包含：`Cargo.toml` + `src/` + `tests/` + `doc/`
 
 ## gqlite-parser 模块索引 (crates/parser/)
 
@@ -51,7 +51,7 @@ Query: GQL String
 | functions | `src/functions/` | FunctionRegistry, 标量函数, 聚合函数 |
 | transaction | `src/transaction/` | TransactionManager (SWMR), WAL |
 | error | `src/error.rs` | GqliteError 统一错误类型 |
-| tests | `tests/` | basic_test.rs, persistence_test.rs |
+| tests | `tests/` | 25 个集成测试文件（`<module>_test.rs`） |
 
 ## 设计与计划文档
 
@@ -89,4 +89,4 @@ Query: GQL String
 
 ## 测试
 
-272 个测试（265 单元 + 2 基础集成 + 5 持久化集成），零 warning。运行：`cargo test`
+272 个测试，全部在 `tests/` 目录中（集成测试），零 warning。运行：`cargo test`
