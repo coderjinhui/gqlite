@@ -61,6 +61,20 @@ impl FunctionRegistry {
         self.register_scalar("range", scalar::fn_range);
         // Path functions
         self.register_scalar("nodes", scalar::fn_nodes);
+        // Math functions
+        self.register_scalar("ceil", scalar::fn_ceil);
+        self.register_scalar("floor", scalar::fn_floor);
+        self.register_scalar("round", scalar::fn_round);
+        self.register_scalar("sqrt", scalar::fn_sqrt);
+        self.register_scalar("log", scalar::fn_log);
+        self.register_scalar("log10", scalar::fn_log10);
+        self.register_scalar("sign", scalar::fn_sign);
+        self.register_scalar("rand", scalar::fn_rand);
+        self.register_scalar("pi", scalar::fn_pi);
+        self.register_scalar("e", scalar::fn_e);
+        // Conversion functions
+        self.register_scalar("tointeger", scalar::fn_to_integer);
+        self.register_scalar("tofloat", scalar::fn_to_float);
     }
 
     fn register_scalar(&mut self, name: &str, f: ScalarFn) {

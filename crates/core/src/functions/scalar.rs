@@ -474,6 +474,143 @@ pub fn fn_range(args: &[Value]) -> Result<Value, GqliteError> {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Math functions
+// ---------------------------------------------------------------------------
+
+pub fn fn_ceil(args: &[Value]) -> Result<Value, GqliteError> {
+    match args.first() {
+        Some(Value::Int(i)) => Ok(Value::Float((*i as f64).ceil())),
+        Some(Value::Float(f)) => Ok(Value::Float(f.ceil())),
+        Some(Value::Null) => Ok(Value::Null),
+        _ => Err(GqliteError::Execution("ceil() expects a number".into())),
+    }
+}
+
+pub fn fn_floor(args: &[Value]) -> Result<Value, GqliteError> {
+    match args.first() {
+        Some(Value::Int(i)) => Ok(Value::Float((*i as f64).floor())),
+        Some(Value::Float(f)) => Ok(Value::Float(f.floor())),
+        Some(Value::Null) => Ok(Value::Null),
+        _ => Err(GqliteError::Execution("floor() expects a number".into())),
+    }
+}
+
+pub fn fn_round(args: &[Value]) -> Result<Value, GqliteError> {
+    match args.first() {
+        Some(Value::Int(i)) => Ok(Value::Float((*i as f64).round())),
+        Some(Value::Float(f)) => Ok(Value::Float(f.round())),
+        Some(Value::Null) => Ok(Value::Null),
+        _ => Err(GqliteError::Execution("round() expects a number".into())),
+    }
+}
+
+pub fn fn_sqrt(args: &[Value]) -> Result<Value, GqliteError> {
+    match args.first() {
+        Some(Value::Int(i)) => Ok(Value::Float((*i as f64).sqrt())),
+        Some(Value::Float(f)) => Ok(Value::Float(f.sqrt())),
+        Some(Value::Null) => Ok(Value::Null),
+        _ => Err(GqliteError::Execution("sqrt() expects a number".into())),
+    }
+}
+
+pub fn fn_log(args: &[Value]) -> Result<Value, GqliteError> {
+    match args.first() {
+        Some(Value::Int(i)) => Ok(Value::Float((*i as f64).ln())),
+        Some(Value::Float(f)) => Ok(Value::Float(f.ln())),
+        Some(Value::Null) => Ok(Value::Null),
+        _ => Err(GqliteError::Execution("log() expects a number".into())),
+    }
+}
+
+pub fn fn_log10(args: &[Value]) -> Result<Value, GqliteError> {
+    match args.first() {
+        Some(Value::Int(i)) => Ok(Value::Float((*i as f64).log10())),
+        Some(Value::Float(f)) => Ok(Value::Float(f.log10())),
+        Some(Value::Null) => Ok(Value::Null),
+        _ => Err(GqliteError::Execution("log10() expects a number".into())),
+    }
+}
+
+pub fn fn_sign(args: &[Value]) -> Result<Value, GqliteError> {
+    match args.first() {
+        Some(Value::Int(i)) => Ok(Value::Int(i.signum())),
+        Some(Value::Float(f)) => {
+            if f.is_nan() {
+                Ok(Value::Int(0))
+            } else if *f > 0.0 {
+                Ok(Value::Int(1))
+            } else if *f < 0.0 {
+                Ok(Value::Int(-1))
+            } else {
+                Ok(Value::Int(0))
+            }
+        }
+        Some(Value::Null) => Ok(Value::Null),
+        _ => Err(GqliteError::Execution("sign() expects a number".into())),
+    }
+}
+
+pub fn fn_rand(args: &[Value]) -> Result<Value, GqliteError> {
+    if !args.is_empty() {
+        return Err(GqliteError::Execution("rand() expects no arguments".into()));
+    }
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .subsec_nanos();
+    Ok(Value::Float(nanos as f64 / 1_000_000_000.0))
+}
+
+pub fn fn_pi(args: &[Value]) -> Result<Value, GqliteError> {
+    if !args.is_empty() {
+        return Err(GqliteError::Execution("pi() expects no arguments".into()));
+    }
+    Ok(Value::Float(std::f64::consts::PI))
+}
+
+pub fn fn_e(args: &[Value]) -> Result<Value, GqliteError> {
+    if !args.is_empty() {
+        return Err(GqliteError::Execution("e() expects no arguments".into()));
+    }
+    Ok(Value::Float(std::f64::consts::E))
+}
+
+pub fn fn_to_integer(args: &[Value]) -> Result<Value, GqliteError> {
+    match args.first() {
+        Some(Value::Int(i)) => Ok(Value::Int(*i)),
+        Some(Value::Float(f)) => Ok(Value::Int(*f as i64)),
+        Some(Value::String(s)) => match s.parse::<i64>() {
+            Ok(i) => Ok(Value::Int(i)),
+            Err(_) => Err(GqliteError::Execution(
+                format!("toInteger() cannot parse '{}' as integer", s),
+            )),
+        },
+        Some(Value::Null) => Ok(Value::Null),
+        _ => Err(GqliteError::Execution(
+            "toInteger() expects a number or string".into(),
+        )),
+    }
+}
+
+pub fn fn_to_float(args: &[Value]) -> Result<Value, GqliteError> {
+    match args.first() {
+        Some(Value::Int(i)) => Ok(Value::Float(*i as f64)),
+        Some(Value::Float(f)) => Ok(Value::Float(*f)),
+        Some(Value::String(s)) => match s.parse::<f64>() {
+            Ok(f) => Ok(Value::Float(f)),
+            Err(_) => Err(GqliteError::Execution(
+                format!("toFloat() cannot parse '{}' as float", s),
+            )),
+        },
+        Some(Value::Null) => Ok(Value::Null),
+        _ => Err(GqliteError::Execution(
+            "toFloat() expects a number or string".into(),
+        )),
+    }
+}
+
 /// Simple comparison for sorting values.
 fn value_cmp(a: &Value, b: &Value) -> std::cmp::Ordering {
     use std::cmp::Ordering;
