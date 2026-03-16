@@ -23,7 +23,7 @@ Query: GQL String
 |-------|------|------|
 | gqlite-parser | `crates/parser/` | 独立 Cypher 解析器：Lexer, AST, Parser, DataType |
 | gqlite-core | `crates/core/` | 引擎核心：存储、规划、执行、事务（依赖 gqlite-parser） |
-| gqlite-cli | `crates/cli/` | 交互式 REPL (rustyline) |
+| gqlite-cli | `crates/cli/` | 交互式 REPL (rustyline)，Tab 补全 + 灰色提示 |
 
 每个 crate 必须包含：`Cargo.toml` + `src/` + `tests/` + `doc/`
 
@@ -70,6 +70,7 @@ Query: GQL String
 - **P0 查询处理 (021-027)**: ✅ 全部完成
 - **P0 集成层 (028-032)**: ✅ 全部完成
 - **P0 事务 (033-036)**: ✅ 全部完成 (SWMR + WAL + Recovery + Checkpoint)
+- **Post-plan**: ✅ Checkpoint (.graph 主文件 + WAL 两阶段恢复) + Auto-checkpoint + CLI 补全
 - **P1 查询增强 (037-044)**: ✅ 全部完成 (WITH/ORDER BY/LIMIT/SKIP + Aggregate + Sort + OPTIONAL MATCH/UNION + MERGE/UNWIND + 优化)
 - **P1 存储增强 (045-048)**: ✅ 全部完成 (Bit-Packing + Buffer Pool + SERIAL + ALTER TABLE)
 - **P1 导入导出 (049-051)**: ✅ 全部完成 (COPY FROM/TO CSV)
@@ -90,3 +91,5 @@ Query: GQL String
 ## 测试
 
 272 个测试，全部在 `tests/` 目录中（集成测试），零 warning。运行：`cargo test`
+
+（含 auto-checkpoint 集成测试，总计 285 个）

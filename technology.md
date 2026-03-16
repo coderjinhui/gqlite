@@ -14,7 +14,7 @@
 | 哈希 | ahash | ^0.8 | 高性能 HashMap |
 | 并发锁 | parking_lot | ^0.12 | SWMR 事务管理 |
 | CRC 校验 | crc32fast | ^1 | WAL 记录校验和 |
-| REPL | rustyline | ^14 | CLI 交互式编辑 |
+| REPL | rustyline | ^14 | CLI 交互式编辑，Tab 补全 + 灰色提示 (derive feature) |
 
 ## 核心数据结构
 
