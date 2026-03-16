@@ -38,6 +38,27 @@ impl FunctionRegistry {
         self.register_scalar("to_string", scalar::fn_to_string);
         self.register_scalar("coalesce", scalar::fn_coalesce);
         self.register_scalar("abs", scalar::fn_abs);
+        self.register_scalar("ltrim", scalar::fn_ltrim);
+        self.register_scalar("rtrim", scalar::fn_rtrim);
+        self.register_scalar("substring", scalar::fn_substring);
+        self.register_scalar("replace", scalar::fn_replace);
+        self.register_scalar("reverse", scalar::fn_reverse);
+        self.register_scalar("left", scalar::fn_left);
+        self.register_scalar("right", scalar::fn_right);
+        self.register_scalar("lpad", scalar::fn_lpad);
+        self.register_scalar("rpad", scalar::fn_rpad);
+        self.register_scalar("repeat", scalar::fn_repeat);
+        // List functions
+        self.register_scalar("list_len", scalar::fn_list_len);
+        self.register_scalar("list_extract", scalar::fn_list_extract);
+        self.register_scalar("list_append", scalar::fn_list_append);
+        self.register_scalar("list_prepend", scalar::fn_list_prepend);
+        self.register_scalar("list_concat", scalar::fn_list_concat);
+        self.register_scalar("list_contains", scalar::fn_list_contains);
+        self.register_scalar("list_reverse", scalar::fn_list_reverse);
+        self.register_scalar("list_sort", scalar::fn_list_sort);
+        self.register_scalar("list_distinct", scalar::fn_list_distinct);
+        self.register_scalar("range", scalar::fn_range);
     }
 
     fn register_scalar(&mut self, name: &str, f: ScalarFn) {
