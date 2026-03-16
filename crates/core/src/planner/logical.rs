@@ -1042,6 +1042,9 @@ fn contains_aggregate(expr: &Expr) -> bool {
             }
             false
         }
+        Expr::In { expr, list, .. } => {
+            contains_aggregate(expr) || contains_aggregate(list)
+        }
         _ => false,
     }
 }

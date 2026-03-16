@@ -332,6 +332,10 @@ impl<'a> Binder<'a> {
                 }
                 Ok(())
             }
+            Expr::In { expr, list, .. } => {
+                self.validate_expr(expr)?;
+                self.validate_expr(list)
+            }
         }
     }
 

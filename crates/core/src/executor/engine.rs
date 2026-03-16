@@ -1793,6 +1793,23 @@ impl Engine {
             Expr::Param(name) => {
                 Ok(self.params.get(name).cloned().unwrap_or(Value::Null))
             }
+
+            Expr::In { expr, list, negated } => {
+                let val = self.eval_expr(expr, columns, row)?;
+                let list_val = self.eval_expr(list, columns, row)?;
+                match list_val {
+                    Value::List(items) => {
+                        let found = items.iter().any(|item| {
+                            eval_binary_op(&val, &BinOp::Eq, item)
+                                .map(|v| v == Value::Bool(true))
+                                .unwrap_or(false)
+                        });
+                        Ok(Value::Bool(if *negated { !found } else { found }))
+                    }
+                    Value::Null => Ok(Value::Null),
+                    _ => Err(GqliteError::Execution("IN requires a list".into())),
+                }
+            }
         }
     }
 }

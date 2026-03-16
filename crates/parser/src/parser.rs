@@ -836,6 +836,27 @@ impl Parser {
             });
         }
 
+        // [NOT] IN [list]
+        if self.check(&Token::In) {
+            self.advance();
+            let list = self.parse_addition()?;
+            return Ok(Expr::In {
+                expr: Box::new(left),
+                list: Box::new(list),
+                negated: false,
+            });
+        }
+        if self.check(&Token::Not) && self.peek_at(1) == &Token::In {
+            self.advance(); // consume NOT
+            self.advance(); // consume IN
+            let list = self.parse_addition()?;
+            return Ok(Expr::In {
+                expr: Box::new(left),
+                list: Box::new(list),
+                negated: true,
+            });
+        }
+
         let op = match self.peek() {
             Token::Eq => Some(BinOp::Eq),
             Token::Neq | Token::BangEq => Some(BinOp::Neq),

@@ -411,6 +411,10 @@ fn collect_expr_aliases(expr: &Expr, aliases: &mut Vec<String>) {
                 collect_expr_aliases(el, aliases);
             }
         }
+        Expr::In { expr, list, .. } => {
+            collect_expr_aliases(expr, aliases);
+            collect_expr_aliases(list, aliases);
+        }
         _ => {}
     }
 }
@@ -541,6 +545,10 @@ fn collect_expr_columns(expr: &Expr, cols: &mut Vec<ColumnRef>) {
             if let Some(el) = else_result {
                 collect_expr_columns(el, cols);
             }
+        }
+        Expr::In { expr, list, .. } => {
+            collect_expr_columns(expr, cols);
+            collect_expr_columns(list, cols);
         }
         _ => {}
     }

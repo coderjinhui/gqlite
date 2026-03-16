@@ -326,6 +326,12 @@ pub enum Expr {
         when_clauses: Vec<(Expr, Expr)>,
         else_result: Option<Box<Expr>>,
     },
+    /// IN list expression: expr [NOT] IN [list]
+    In {
+        expr: Box<Expr>,
+        list: Box<Expr>,
+        negated: bool,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
