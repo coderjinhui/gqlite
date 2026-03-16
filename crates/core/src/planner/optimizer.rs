@@ -415,6 +415,9 @@ fn collect_expr_aliases(expr: &Expr, aliases: &mut Vec<String>) {
             collect_expr_aliases(expr, aliases);
             collect_expr_aliases(list, aliases);
         }
+        Expr::Exists(_) => {
+            // EXISTS subquery has its own scope; don't collect inner aliases.
+        }
         _ => {}
     }
 }
@@ -549,6 +552,9 @@ fn collect_expr_columns(expr: &Expr, cols: &mut Vec<ColumnRef>) {
         Expr::In { expr, list, .. } => {
             collect_expr_columns(expr, cols);
             collect_expr_columns(list, cols);
+        }
+        Expr::Exists(_) => {
+            // EXISTS subquery has its own scope; don't collect inner columns.
         }
         _ => {}
     }

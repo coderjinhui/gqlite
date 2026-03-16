@@ -345,6 +345,8 @@ pub enum Expr {
         list: Box<Expr>,
         negated: bool,
     },
+    /// EXISTS { subquery } — evaluates to true if the subquery returns at least one row.
+    Exists(Box<QueryStatement>),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

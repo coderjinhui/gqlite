@@ -389,6 +389,11 @@ impl<'a> Binder<'a> {
                 self.validate_expr(expr)?;
                 self.validate_expr(list)
             }
+            Expr::Exists(_) => {
+                // The inner query is validated when it gets bound during execution.
+                // At bind time we just accept it — the inner scope is separate.
+                Ok(())
+            }
         }
     }
 

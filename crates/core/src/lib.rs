@@ -469,7 +469,8 @@ impl Connection {
         // 5. Auto-transaction + Execute
         if physical.is_read_only() {
             let mut txn = self.db.txn_manager.begin_read_only();
-            let engine = Engine::with_snapshot(txn.start_ts, params);
+            let mut engine = Engine::with_snapshot(txn.start_ts, params);
+            engine.set_db(self.db.clone());
             let result = engine.execute_plan_parallel(&physical, &self.db, txn.id);
             match &result {
                 Ok(_) => self.db.txn_manager.commit(&mut txn),
@@ -479,7 +480,8 @@ impl Connection {
         } else {
             let (mut txn, _write_guard) = self.db.txn_manager.begin_read_write()?;
             let txn_id = txn.id;
-            let engine = Engine::with_snapshot(txn.start_ts, params);
+            let mut engine = Engine::with_snapshot(txn.start_ts, params);
+            engine.set_db(self.db.clone());
             let result = engine.execute_plan(&physical, &self.db, txn_id);
             let mut should_checkpoint = false;
             match &result {
@@ -550,7 +552,8 @@ impl PreparedStatement {
 
         if self.plan.is_read_only() {
             let mut txn = txn_manager.begin_read_only();
-            let engine = Engine::with_snapshot(txn.start_ts, params);
+            let mut engine = Engine::with_snapshot(txn.start_ts, params);
+            engine.set_db(self.db.clone());
             let result = engine.execute_plan_parallel(&self.plan, &self.db, txn.id);
             match &result {
                 Ok(_) => txn_manager.commit(&mut txn),
@@ -560,7 +563,8 @@ impl PreparedStatement {
         } else {
             let (mut txn, _write_guard) = txn_manager.begin_read_write()?;
             let txn_id = txn.id;
-            let engine = Engine::with_snapshot(txn.start_ts, params);
+            let mut engine = Engine::with_snapshot(txn.start_ts, params);
+            engine.set_db(self.db.clone());
             let result = engine.execute_plan(&self.plan, &self.db, txn_id);
             let mut should_checkpoint = false;
             match &result {

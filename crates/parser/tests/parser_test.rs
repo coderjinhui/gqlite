@@ -528,3 +528,52 @@ fn all_shortest_paths_parse() {
     assert_eq!(sp.path_variable, "p");
     assert!(sp.all_paths);
 }
+
+// ── EXISTS expression tests ─────────────────────────────────
+
+#[test]
+fn exists_subquery_parse() {
+    let stmt = parse(
+        "MATCH (p:Person) WHERE EXISTS { MATCH (p)-[:KNOWS]->(:Person) } RETURN p.name",
+    );
+    let Statement::Query(q) = stmt else { panic!() };
+    // Clause 0: MATCH, Clause 1: WHERE, Clause 2: RETURN
+    let Clause::Where(w) = &q.clauses[1] else {
+        panic!("expected WHERE clause");
+    };
+    match &w.expr {
+        Expr::Exists(inner) => {
+            // The inner query should have a MATCH clause
+            assert!(!inner.clauses.is_empty());
+            let Clause::Match(_) = &inner.clauses[0] else {
+                panic!("expected inner MATCH clause");
+            };
+        }
+        _ => panic!("expected Expr::Exists"),
+    }
+}
+
+#[test]
+fn not_exists_subquery_parse() {
+    let stmt = parse(
+        "MATCH (p:Person) WHERE NOT EXISTS { MATCH (p)-[:KNOWS]->(:Person) } RETURN p.name",
+    );
+    let Statement::Query(q) = stmt else { panic!() };
+    let Clause::Where(w) = &q.clauses[1] else {
+        panic!("expected WHERE clause");
+    };
+    // NOT EXISTS is parsed as UnaryOp(Not, Exists(...))
+    match &w.expr {
+        Expr::UnaryOp {
+            op: UnaryOp::Not,
+            expr: inner,
+        } => match inner.as_ref() {
+            Expr::Exists(query) => {
+                assert!(!query.clauses.is_empty());
+            }
+            _ => panic!("expected Expr::Exists inside NOT"),
+        },
+        _ => panic!("expected UnaryOp(Not, Exists(...))"),
+    }
+}
+

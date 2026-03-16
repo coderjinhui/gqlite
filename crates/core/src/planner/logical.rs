@@ -1160,6 +1160,7 @@ fn contains_aggregate(expr: &Expr) -> bool {
         Expr::In { expr, list, .. } => {
             contains_aggregate(expr) || contains_aggregate(list)
         }
+        Expr::Exists(_) => false,
         _ => false,
     }
 }

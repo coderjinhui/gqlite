@@ -16,6 +16,11 @@ use crate::types::graph::InternalId;
 use crate::types::value::Value;
 use crate::{ColumnInfo, DatabaseInner, QueryResult, Row};
 
+// Imports for EXISTS subquery evaluation
+use crate::binder::Binder;
+use crate::planner::logical::Planner;
+use crate::planner::{optimizer, physical};
+
 // ── Intermediate result ─────────────────────────────────────────
 
 /// Intermediate columnar result produced during operator evaluation.
@@ -61,6 +66,11 @@ pub struct Engine {
     /// MVCC snapshot timestamp for visibility checks.
     /// Rows with `create_ts <= start_ts` and `delete_ts == 0 || delete_ts > start_ts` are visible.
     start_ts: u64,
+    /// Database reference for correlated subqueries (EXISTS).
+    db: Option<Arc<DatabaseInner>>,
+    /// Outer scope bindings for correlated subqueries (EXISTS).
+    /// Each entry: (column_names, row_values) representing the outer row.
+    outer_scope: Option<(Vec<String>, Vec<Value>)>,
 }
 
 impl Engine {
@@ -68,6 +78,8 @@ impl Engine {
         Self {
             params: HashMap::new(),
             start_ts: u64::MAX, // legacy: see everything
+            db: None,
+            outer_scope: None,
         }
     }
 
@@ -75,12 +87,19 @@ impl Engine {
         Self {
             params,
             start_ts: u64::MAX,
+            db: None,
+            outer_scope: None,
         }
     }
 
     /// Create an engine with MVCC snapshot and optional parameters.
     pub fn with_snapshot(start_ts: u64, params: HashMap<String, Value>) -> Self {
-        Self { params, start_ts }
+        Self { params, start_ts, db: None, outer_scope: None }
+    }
+
+    /// Set the database reference for correlated subquery evaluation (EXISTS).
+    pub fn set_db(&mut self, db: Arc<DatabaseInner>) {
+        self.db = Some(db);
     }
 
     /// Execute a physical plan against the database, returning a QueryResult.
@@ -715,6 +734,11 @@ impl Engine {
     ) -> Result<Intermediate, GqliteError> {
         // Handle unlabeled node scan (no table specified)
         if table_name.is_empty() {
+            // For EXISTS subqueries: check if this alias is bound in the outer scope.
+            // If so, inject the outer row's data for this variable instead of returning empty.
+            if let Some((ref outer_cols, ref outer_row)) = self.outer_scope {
+                return self.inject_outer_scope_scan(db, alias, outer_cols, outer_row);
+            }
             return Ok(Intermediate::empty());
         }
 
@@ -753,6 +777,96 @@ impl Engine {
             columns: col_names,
             types: col_types,
             rows,
+        })
+    }
+
+    /// For EXISTS subqueries: inject outer scope data for an unlabeled node scan.
+    ///
+    /// When the inner query references a variable `p` that exists in the outer scope,
+    /// we look up the outer row's data for that variable (InternalId + properties)
+    /// and return it as a single-row Intermediate, as if the scan found exactly that node.
+    fn inject_outer_scope_scan(
+        &self,
+        db: &Arc<DatabaseInner>,
+        alias: &str,
+        outer_cols: &[String],
+        outer_row: &[Value],
+    ) -> Result<Intermediate, GqliteError> {
+        // Find the outer InternalId column for this alias.
+        // The outer scope has columns like "p" (InternalId) and "p.name", "p.id", etc.
+        // We also look for "p.__internal_id" pattern used by some paths.
+        let internal_id_idx = outer_cols.iter().position(|c| c == alias);
+        let internal_id_val = match internal_id_idx {
+            Some(idx) => match &outer_row[idx] {
+                Value::InternalId(id) => *id,
+                _ => return Ok(Intermediate::empty()),
+            },
+            None => {
+                // Try __internal_id suffix
+                let alt_name = format!("{}.__internal_id", alias);
+                let alt_idx = outer_cols.iter().position(|c| c == &alt_name);
+                match alt_idx {
+                    Some(idx) => match &outer_row[idx] {
+                        Value::InternalId(id) => *id,
+                        _ => return Ok(Intermediate::empty()),
+                    },
+                    None => return Ok(Intermediate::empty()),
+                }
+            }
+        };
+
+        // We found the node. Now reconstruct the scan output as if we scanned just this node.
+        // Look up the node's table to get schema info.
+        let real_table_id = internal_id_val.table_id;
+        let catalog = db.catalog.read().unwrap();
+        let entry = catalog.get_node_table_by_id(real_table_id);
+        let schema = entry.map(|e| e.columns.clone()).unwrap_or_default();
+        drop(catalog);
+
+        // Build column names: alias (InternalId), alias.col1, alias.col2, ...
+        let mut col_names = vec![alias.to_string()];
+        let mut col_types = vec![DataType::InternalId];
+        for col in &schema {
+            col_names.push(format!("{}.{}", alias, col.name));
+            col_types.push(col.data_type.clone());
+        }
+
+        // Build the row: first the InternalId, then property values from the outer row.
+        let mut row_values = vec![Value::InternalId(internal_id_val)];
+        for col in &schema {
+            let prop_col = format!("{}.{}", alias, col.name);
+            if let Some(idx) = outer_cols.iter().position(|c| c == &prop_col) {
+                row_values.push(outer_row[idx].clone());
+            } else {
+                // Property not in outer scope, read from storage directly
+                let storage = db.storage.read().unwrap();
+                if let Some(nt) = storage.node_tables.get(&real_table_id) {
+                    let offset = internal_id_val.offset;
+                    if let Ok(all_vals) = nt.read(offset) {
+                        // Find the column index in the schema
+                        let col_idx = schema.iter().position(|s| s.name == col.name);
+                        if let Some(ci) = col_idx {
+                            if ci < all_vals.len() {
+                                row_values.push(all_vals[ci].clone());
+                            } else {
+                                row_values.push(Value::Null);
+                            }
+                        } else {
+                            row_values.push(Value::Null);
+                        }
+                    } else {
+                        row_values.push(Value::Null);
+                    }
+                } else {
+                    row_values.push(Value::Null);
+                }
+            }
+        }
+
+        Ok(Intermediate {
+            columns: col_names,
+            types: col_types,
+            rows: vec![row_values],
         })
     }
 
@@ -1988,6 +2102,46 @@ impl Engine {
                     Value::Null => Ok(Value::Null),
                     _ => Err(GqliteError::Execution("IN requires a list".into())),
                 }
+            }
+
+            Expr::Exists(inner_query) => {
+                let db_arc = self.db.as_ref().ok_or_else(|| {
+                    GqliteError::Execution("EXISTS requires database context".into())
+                })?;
+
+                // Bind the inner query against the catalog.
+                let catalog = db_arc.catalog.read().unwrap();
+                let mut binder = Binder::new(&catalog);
+                let bound = binder.bind(&Statement::Query(inner_query.as_ref().clone()))?;
+
+                // Plan (logical) + optimize
+                let planner = Planner::new(&catalog);
+                let logical = planner.plan(&bound)?;
+                let logical = optimizer::optimize(logical);
+
+                // Physical plan
+                let physical_plan = physical::to_physical(&logical);
+                drop(catalog);
+
+                // Execute the inner query with the same snapshot timestamp,
+                // passing the current outer row as scope so that unlabeled node
+                // scans can resolve correlated variables (e.g., `(p)` in the
+                // inner MATCH refers to the outer `p`).
+                let inner_engine = Engine {
+                    params: self.params.clone(),
+                    start_ts: self.start_ts,
+                    db: self.db.clone(),
+                    outer_scope: Some((columns.to_vec(), row.to_vec())),
+                };
+                let inner_txn = db_arc.txn_manager.begin_read_only();
+                let inner_result = inner_engine.execute_operator(
+                    &physical_plan,
+                    db_arc,
+                    inner_txn.id,
+                )?;
+
+                // EXISTS returns true if the inner query produces at least one row.
+                Ok(Value::Bool(!inner_result.rows.is_empty()))
             }
         }
     }

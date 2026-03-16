@@ -1049,6 +1049,7 @@ impl Parser {
                 })
             }
             Token::Case => self.parse_case_expr(),
+            Token::Exists => self.parse_exists_expr(),
             _ => Err(self.error(&format!("unexpected token: {:?}", self.peek()))),
         }
     }
@@ -1147,6 +1148,15 @@ impl Parser {
             when_clauses,
             else_result,
         })
+    }
+
+    /// Parse `EXISTS { <query-body> }`.
+    fn parse_exists_expr(&mut self) -> Result<Expr, ParseError> {
+        self.expect(&Token::Exists)?;
+        self.expect(&Token::LBrace)?;
+        let query = self.parse_query_body()?;
+        self.expect(&Token::RBrace)?;
+        Ok(Expr::Exists(Box::new(query)))
     }
 
     // ── Token helpers ───────────────────────────────────────────
