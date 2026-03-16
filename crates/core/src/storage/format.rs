@@ -30,14 +30,16 @@ pub const INVALID_PAGE_IDX: u64 = u64::MAX;
 ///
 /// Fixed at 128 bytes. Layout:
 /// ```text
-/// [0..4]     magic           "GQLT"
-/// [4..8]     version         u32 LE
-/// [8..12]    page_size       u32 LE
-/// [12..20]   page_count      u64 LE
-/// [20..36]   database_id     [u8; 16] UUID
-/// [36..44]   catalog_page    u64 LE
-/// [44..52]   free_list_page  u64 LE
-/// [52..128]  _reserved       zeroed
+/// [0..4]     magic              "GQLT"
+/// [4..8]     version            u32 LE
+/// [8..12]    page_size          u32 LE
+/// [12..20]   page_count         u64 LE
+/// [20..36]   database_id        [u8; 16] UUID
+/// [36..44]   catalog_page       u64 LE
+/// [44..52]   free_list_page     u64 LE
+/// [52..60]   storage_page_idx   u64 LE
+/// [60..68]   checkpoint_ts      u64 LE
+/// [68..128]  _reserved          zeroed
 /// ```
 #[derive(Debug, Clone)]
 pub struct FileHeader {
@@ -48,6 +50,8 @@ pub struct FileHeader {
     pub database_id: [u8; 16],
     pub catalog_page_idx: u64,
     pub free_list_page_idx: u64,
+    pub storage_page_idx: u64,
+    pub checkpoint_ts: u64,
 }
 
 impl FileHeader {
@@ -61,6 +65,8 @@ impl FileHeader {
             database_id: *db_id.as_bytes(),
             catalog_page_idx: INVALID_PAGE_IDX,
             free_list_page_idx: INVALID_PAGE_IDX,
+            storage_page_idx: INVALID_PAGE_IDX,
+            checkpoint_ts: 0,
         }
     }
 
@@ -98,6 +104,8 @@ impl FileHeader {
 
         let catalog_page_idx = u64::from_le_bytes(buf[36..44].try_into().unwrap());
         let free_list_page_idx = u64::from_le_bytes(buf[44..52].try_into().unwrap());
+        let storage_page_idx = u64::from_le_bytes(buf[52..60].try_into().unwrap());
+        let checkpoint_ts = u64::from_le_bytes(buf[60..68].try_into().unwrap());
 
         let header = Self {
             magic,
@@ -107,6 +115,8 @@ impl FileHeader {
             database_id,
             catalog_page_idx,
             free_list_page_idx,
+            storage_page_idx,
+            checkpoint_ts,
         };
         header.validate()?;
         Ok(header)
@@ -123,7 +133,9 @@ impl FileHeader {
         buf[20..36].copy_from_slice(&self.database_id);
         buf[36..44].copy_from_slice(&self.catalog_page_idx.to_le_bytes());
         buf[44..52].copy_from_slice(&self.free_list_page_idx.to_le_bytes());
-        // [52..128] remains zeroed (_reserved)
+        buf[52..60].copy_from_slice(&self.storage_page_idx.to_le_bytes());
+        buf[60..68].copy_from_slice(&self.checkpoint_ts.to_le_bytes());
+        // [68..128] remains zeroed (_reserved)
 
         writer.write_all(&buf)?;
         Ok(())

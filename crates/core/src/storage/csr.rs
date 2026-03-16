@@ -1,7 +1,9 @@
+use serde::{Deserialize, Serialize};
+
 use crate::types::value::Value;
 
 /// CSR header: offsets and lengths per source node.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct CSRHeader {
     /// offsets[i] = start index in neighbor_ids for source node i.
     pub offsets: Vec<u64>,
@@ -10,7 +12,7 @@ pub struct CSRHeader {
 }
 
 /// A pending edge insert that hasn't been compacted into the main CSR structure.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PendingEdge {
     pub src_offset: u64,
     pub dst_offset: u64,
@@ -22,7 +24,7 @@ pub struct PendingEdge {
 ///
 /// Stores the adjacency list in compressed form: for each source node, its
 /// neighbors are in `neighbor_ids[offsets[src]..offsets[src]+lengths[src]]`.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CSRNodeGroup {
     pub group_idx: u32,
     pub header: CSRHeader,
