@@ -51,6 +51,24 @@ pub enum WalPayload {
     DropTable {
         name: String,
     },
+    AlterTableAddColumn {
+        table_name: String,
+        col_name: String,
+        data_type: DataType,
+    },
+    AlterTableDropColumn {
+        table_name: String,
+        col_name: String,
+    },
+    AlterTableRenameTable {
+        old_name: String,
+        new_name: String,
+    },
+    AlterTableRenameColumn {
+        table_name: String,
+        old_col: String,
+        new_col: String,
+    },
     InsertNode {
         table_name: String,
         table_id: u32,
@@ -174,6 +192,10 @@ fn payload_type_tag(p: &WalPayload) -> u8 {
         WalPayload::InsertRel { .. } => 5,
         WalPayload::UpdateProperty { .. } => 6,
         WalPayload::DeleteNode { .. } => 7,
+        WalPayload::AlterTableAddColumn { .. } => 11,
+        WalPayload::AlterTableDropColumn { .. } => 12,
+        WalPayload::AlterTableRenameTable { .. } => 13,
+        WalPayload::AlterTableRenameColumn { .. } => 14,
         WalPayload::TxnCommit => 10,
     }
 }
@@ -282,13 +304,15 @@ pub fn replay_wal(
     records: &[WalRecord],
     catalog: &mut Catalog,
     storage: &mut Storage,
-) -> Result<(), GqliteError> {
+) -> Result<u64, GqliteError> {
     // 1. Find committed transaction IDs
     let committed: std::collections::HashSet<u64> = records
         .iter()
         .filter(|r| matches!(r.payload, WalPayload::TxnCommit))
         .map(|r| r.txn_id)
         .collect();
+
+    let max_committed = committed.iter().copied().max().unwrap_or(0);
 
     // 2. Replay committed records in order
     for record in records {
@@ -354,7 +378,7 @@ pub fn replay_wal(
                 table_id, values, ..
             } => {
                 if let Some(nt) = storage.node_tables.get_mut(table_id) {
-                    nt.insert(values)?;
+                    nt.insert(values, record.txn_id)?;
                 }
             }
 
@@ -387,7 +411,79 @@ pub fn replay_wal(
                 node_offset,
             } => {
                 if let Some(nt) = storage.node_tables.get_mut(table_id) {
-                    nt.delete(*node_offset)?;
+                    nt.delete(*node_offset, record.txn_id)?;
+                }
+            }
+
+            WalPayload::AlterTableAddColumn {
+                table_name,
+                col_name,
+                data_type,
+            } => {
+                let col_id = catalog
+                    .get_node_table(table_name)
+                    .map(|e| e.columns.len() as u32)
+                    .or_else(|| catalog.get_rel_table(table_name).map(|e| e.columns.len() as u32))
+                    .unwrap_or(0);
+                let col_def = ColumnDef {
+                    column_id: col_id,
+                    name: col_name.clone(),
+                    data_type: data_type.clone(),
+                    nullable: true,
+                };
+                let is_node = catalog.get_node_table(table_name).is_some();
+                if is_node {
+                    catalog.add_column_to_node_table(table_name, col_def)?;
+                    let table_id = catalog.get_node_table(table_name).unwrap().table_id;
+                    if let Some(nt) = storage.node_tables.get_mut(&table_id) {
+                        nt.add_column(data_type);
+                    }
+                } else {
+                    catalog.add_column_to_rel_table(table_name, col_def)?;
+                }
+            }
+
+            WalPayload::AlterTableDropColumn {
+                table_name,
+                col_name,
+            } => {
+                let is_node = catalog.get_node_table(table_name).is_some();
+                if is_node {
+                    let col_idx = catalog
+                        .get_node_table(table_name)
+                        .unwrap()
+                        .columns
+                        .iter()
+                        .position(|c| c.name == *col_name);
+                    catalog.drop_column_from_node_table(table_name, col_name)?;
+                    if let Some(idx) = col_idx {
+                        let table_id = catalog.get_node_table(table_name).unwrap().table_id;
+                        if let Some(nt) = storage.node_tables.get_mut(&table_id) {
+                            nt.drop_column(idx);
+                        }
+                    }
+                } else {
+                    catalog.drop_column_from_rel_table(table_name, col_name)?;
+                }
+            }
+
+            WalPayload::AlterTableRenameTable {
+                old_name,
+                new_name,
+            } => {
+                catalog.rename_table(old_name, new_name)?;
+            }
+
+            WalPayload::AlterTableRenameColumn {
+                table_name,
+                old_col,
+                new_col,
+            } => {
+                let is_node = catalog.get_node_table(table_name).is_some();
+                if is_node {
+                    catalog.rename_column_in_node_table(table_name, old_col, new_col)?;
+                } else {
+                    catalog.rename_column_in_rel_table(table_name, old_col, new_col)?;
                 }
             }
 
@@ -397,7 +493,7 @@ pub fn replay_wal(
         }
     }
 
-    Ok(())
+    Ok(max_committed)
 }
 
 /// Return the WAL path for a given database path.

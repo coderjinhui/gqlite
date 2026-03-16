@@ -90,6 +90,19 @@ impl TransactionManager {
         }
     }
 
+    /// Create a TransactionManager with state recovered from WAL replay.
+    ///
+    /// `last_committed` is the highest committed transaction ID found during
+    /// WAL recovery. The next transaction ID will start after it.
+    pub fn with_recovered_state(last_committed: u64) -> Self {
+        Self {
+            next_txn_id: AtomicU64::new(last_committed + 1),
+            write_lock: Mutex::new(()),
+            active_read_txns: RwLock::new(Vec::new()),
+            last_committed_id: AtomicU64::new(last_committed),
+        }
+    }
+
     /// Begin a read-only transaction. Never blocks.
     pub fn begin_read_only(&self) -> Transaction {
         let id = self.next_txn_id.fetch_add(1, Ordering::SeqCst);
@@ -155,6 +168,18 @@ impl TransactionManager {
     /// Return the set of active read transaction ids (for debugging / testing).
     pub fn active_read_count(&self) -> usize {
         self.active_read_txns.read().len()
+    }
+
+    /// Return the minimum `start_ts` among all active read transactions.
+    /// Returns `None` if no read transactions are active (meaning all versions
+    /// older than `last_committed_id` are safe to garbage-collect).
+    pub fn min_active_read_ts(&self) -> Option<TxnId> {
+        let reads = self.active_read_txns.read();
+        // Active read txns store their txn id, but their snapshot is `start_ts`
+        // which was captured at begin time.  Since txn ids are monotonic and
+        // `start_ts` is always <= txn.id, the minimum txn id in the active set
+        // gives us a conservative lower bound.
+        reads.iter().copied().min()
     }
 
     // -- internal --
