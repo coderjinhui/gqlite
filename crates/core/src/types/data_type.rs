@@ -9,6 +9,8 @@ pub enum DataType {
     Double,
     String,
     InternalId,
+    /// Auto-incrementing integer (stored as Int64, auto-assigned on INSERT).
+    Serial,
 }
 
 impl DataType {
@@ -16,7 +18,7 @@ impl DataType {
     pub fn byte_size(&self) -> Option<usize> {
         match self {
             DataType::Bool => Some(1),
-            DataType::Int64 => Some(8),
+            DataType::Int64 | DataType::Serial => Some(8),
             DataType::Double => Some(8),
             DataType::InternalId => Some(12), // u32 + u64
             DataType::String => None,
@@ -37,6 +39,7 @@ impl fmt::Display for DataType {
             DataType::Double => write!(f, "DOUBLE"),
             DataType::String => write!(f, "STRING"),
             DataType::InternalId => write!(f, "INTERNAL_ID"),
+            DataType::Serial => write!(f, "SERIAL"),
         }
     }
 }

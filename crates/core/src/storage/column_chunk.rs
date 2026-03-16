@@ -1,6 +1,7 @@
 use bitvec::prelude::*;
 
 use crate::error::GqliteError;
+use crate::storage::compression;
 use crate::storage::format::CHUNK_CAPACITY;
 use crate::storage::pager::{PageId, Pager};
 use crate::types::data_type::DataType;
@@ -18,6 +19,10 @@ pub struct ColumnChunkMetadata {
     pub null_bitmap_pages: Vec<PageId>,
     /// Number of values stored.
     pub num_values: u64,
+    /// Whether the data pages use FOR+bitpacking compression (Int64 only).
+    pub compressed: bool,
+    /// Byte length of the compressed data (to read back exactly the right amount).
+    pub compressed_len: u64,
 }
 
 /// A column-oriented storage chunk for a single column of fixed capacity.
@@ -87,7 +92,7 @@ impl ColumnChunk {
                 let v = self.buffer[idx];
                 Value::Bool(v != 0)
             }
-            DataType::Int64 => {
+            DataType::Int64 | DataType::Serial => {
                 let offset = idx * 8;
                 let bytes: [u8; 8] = self.buffer[offset..offset + 8].try_into().unwrap();
                 Value::Int(i64::from_le_bytes(bytes))
@@ -137,7 +142,7 @@ impl ColumnChunk {
             (DataType::Bool, Value::Bool(b)) => {
                 self.buffer[idx] = if *b { 1 } else { 0 };
             }
-            (DataType::Int64, Value::Int(v)) => {
+            (DataType::Int64 | DataType::Serial, Value::Int(v)) => {
                 let offset = idx * 8;
                 self.buffer[offset..offset + 8].copy_from_slice(&v.to_le_bytes());
             }
@@ -208,7 +213,30 @@ impl ColumnChunk {
         // Write data buffer (for fixed-size types)
         if self.data_type != DataType::String && !self.buffer.is_empty() {
             let data_bytes = &self.buffer[..self.used_buffer_bytes()];
-            meta.data_pages = write_bytes_to_pages(pager, data_bytes, page_size)?;
+
+            // Try bit-packing compression for Int64/Serial columns
+            if matches!(self.data_type, DataType::Int64 | DataType::Serial)
+                && self.num_values > 0
+            {
+                let values = self.extract_non_null_int64_values();
+                if !values.is_empty() {
+                    let compressed_size = compression::compressed_size_int64(&values);
+                    if compressed_size < data_bytes.len() {
+                        // Compression saves space — use it
+                        let compressed = compression::compress_int64(&values);
+                        meta.data_pages =
+                            write_bytes_to_pages(pager, &compressed, page_size)?;
+                        meta.compressed = true;
+                        meta.compressed_len = compressed.len() as u64;
+                    } else {
+                        meta.data_pages = write_bytes_to_pages(pager, data_bytes, page_size)?;
+                    }
+                } else {
+                    meta.data_pages = write_bytes_to_pages(pager, data_bytes, page_size)?;
+                }
+            } else {
+                meta.data_pages = write_bytes_to_pages(pager, data_bytes, page_size)?;
+            }
         }
 
         // Write strings
@@ -250,9 +278,27 @@ impl ColumnChunk {
 
         // Load data buffer
         if data_type != DataType::String && !meta.data_pages.is_empty() {
-            let used = byte_size * num_values as usize;
-            let data_bytes = read_bytes_from_pages(pager, &meta.data_pages, used, page_size)?;
-            buffer[..data_bytes.len()].copy_from_slice(&data_bytes);
+            if meta.compressed
+                && matches!(data_type, DataType::Int64 | DataType::Serial)
+            {
+                // Compressed Int64 — read compressed bytes and decompress
+                let compressed_bytes = read_bytes_from_pages(
+                    pager,
+                    &meta.data_pages,
+                    meta.compressed_len as usize,
+                    page_size,
+                )?;
+                let values = compression::decompress_int64(&compressed_bytes);
+                for (i, val) in values.iter().enumerate() {
+                    let offset = i * 8;
+                    buffer[offset..offset + 8].copy_from_slice(&val.to_le_bytes());
+                }
+            } else {
+                let used = byte_size * num_values as usize;
+                let data_bytes =
+                    read_bytes_from_pages(pager, &meta.data_pages, used, page_size)?;
+                buffer[..data_bytes.len()].copy_from_slice(&data_bytes);
+            }
         }
 
         // Load strings
@@ -288,6 +334,19 @@ impl ColumnChunk {
     fn used_buffer_bytes(&self) -> usize {
         let byte_size = self.data_type.byte_size().unwrap_or(0);
         byte_size * self.num_values as usize
+    }
+
+    /// Extract non-null Int64 values in order, for compression.
+    /// Returns all values (including positions that are NULL — stored as 0 in buffer).
+    /// We compress the full buffer values, and the null bitmap restores NULLs on load.
+    fn extract_non_null_int64_values(&self) -> Vec<i64> {
+        let mut values = Vec::with_capacity(self.num_values as usize);
+        for i in 0..self.num_values as usize {
+            let offset = i * 8;
+            let bytes: [u8; 8] = self.buffer[offset..offset + 8].try_into().unwrap();
+            values.push(i64::from_le_bytes(bytes));
+        }
+        values
     }
 }
 

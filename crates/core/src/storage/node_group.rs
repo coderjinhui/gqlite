@@ -75,6 +75,23 @@ impl ChunkedNodeGroup {
     pub fn columns(&self) -> &[ColumnChunk] {
         &self.columns
     }
+
+    /// Add a new column filled with NULLs for existing rows.
+    pub fn add_column(&mut self, data_type: &DataType) {
+        let mut col = ColumnChunk::with_default_capacity(data_type.clone());
+        // Fill with NULL for all existing rows
+        for _ in 0..self.num_rows {
+            col.append(&Value::Null).ok();
+        }
+        self.columns.push(col);
+    }
+
+    /// Remove a column by index.
+    pub fn drop_column(&mut self, col_idx: usize) {
+        if col_idx < self.columns.len() {
+            self.columns.remove(col_idx);
+        }
+    }
 }
 
 /// A NodeGroup manages up to NODE_GROUP_SIZE (131072) rows, split into chunks of
@@ -166,6 +183,24 @@ impl NodeGroup {
 
     pub fn chunks(&self) -> &[ChunkedNodeGroup] {
         &self.chunks
+    }
+
+    /// Add a new column to all existing chunks (NULL-filled).
+    pub fn add_column(&mut self, data_type: &DataType) {
+        self.data_types.push(data_type.clone());
+        for chunk in &mut self.chunks {
+            chunk.add_column(data_type);
+        }
+    }
+
+    /// Remove a column from all existing chunks.
+    pub fn drop_column(&mut self, col_idx: usize) {
+        if col_idx < self.data_types.len() {
+            self.data_types.remove(col_idx);
+            for chunk in &mut self.chunks {
+                chunk.drop_column(col_idx);
+            }
+        }
     }
 }
 

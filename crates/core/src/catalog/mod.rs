@@ -22,6 +22,9 @@ pub struct NodeTableEntry {
     pub primary_key_idx: usize,
     /// Total number of rows in this table.
     pub row_count: u64,
+    /// Next value for SERIAL columns (auto-increment counter).
+    #[serde(default)]
+    pub next_serial: u64,
 }
 
 /// Metadata for a relationship table (e.g. `KNOWS`, `ACTED_IN`).
@@ -93,6 +96,7 @@ impl Catalog {
             columns,
             primary_key_idx: pk_idx,
             row_count: 0,
+            next_serial: 0,
         });
 
         Ok(table_id)
@@ -194,6 +198,10 @@ impl Catalog {
         self.node_tables.iter().find(|t| t.table_id == id)
     }
 
+    pub fn get_node_table_mut_by_id(&mut self, id: u32) -> Option<&mut NodeTableEntry> {
+        self.node_tables.iter_mut().find(|t| t.table_id == id)
+    }
+
     pub fn get_rel_table_by_id(&self, id: u32) -> Option<&RelTableEntry> {
         self.rel_tables.iter().find(|t| t.table_id == id)
     }
@@ -214,6 +222,204 @@ impl Catalog {
 
     pub fn rel_tables(&self) -> &[RelTableEntry] {
         &self.rel_tables
+    }
+
+    // ── Plan 048: ALTER TABLE ────────────────────────────────────
+
+    /// Add a column to a node table.
+    pub fn add_column_to_node_table(
+        &mut self,
+        table_name: &str,
+        col: ColumnDef,
+    ) -> Result<(), GqliteError> {
+        let entry = self
+            .node_tables
+            .iter_mut()
+            .find(|t| t.name == table_name)
+            .ok_or_else(|| GqliteError::Other(format!("node table '{}' not found", table_name)))?;
+        if entry.columns.iter().any(|c| c.name == col.name) {
+            return Err(GqliteError::Other(format!(
+                "column '{}' already exists in table '{}'",
+                col.name, table_name
+            )));
+        }
+        entry.columns.push(col);
+        Ok(())
+    }
+
+    /// Add a column to a relationship table.
+    pub fn add_column_to_rel_table(
+        &mut self,
+        table_name: &str,
+        col: ColumnDef,
+    ) -> Result<(), GqliteError> {
+        let entry = self
+            .rel_tables
+            .iter_mut()
+            .find(|t| t.name == table_name)
+            .ok_or_else(|| GqliteError::Other(format!("rel table '{}' not found", table_name)))?;
+        if entry.columns.iter().any(|c| c.name == col.name) {
+            return Err(GqliteError::Other(format!(
+                "column '{}' already exists in table '{}'",
+                col.name, table_name
+            )));
+        }
+        entry.columns.push(col);
+        Ok(())
+    }
+
+    /// Drop a column from a node table.
+    pub fn drop_column_from_node_table(
+        &mut self,
+        table_name: &str,
+        col_name: &str,
+    ) -> Result<(), GqliteError> {
+        let entry = self
+            .node_tables
+            .iter_mut()
+            .find(|t| t.name == table_name)
+            .ok_or_else(|| GqliteError::Other(format!("node table '{}' not found", table_name)))?;
+        // Can't drop the primary key column
+        if entry.columns[entry.primary_key_idx].name == col_name {
+            return Err(GqliteError::Other(format!(
+                "cannot drop primary key column '{}'",
+                col_name
+            )));
+        }
+        let pos = entry
+            .columns
+            .iter()
+            .position(|c| c.name == col_name)
+            .ok_or_else(|| {
+                GqliteError::Other(format!(
+                    "column '{}' not found in table '{}'",
+                    col_name, table_name
+                ))
+            })?;
+        entry.columns.remove(pos);
+        // Adjust primary_key_idx if needed
+        if pos < entry.primary_key_idx {
+            entry.primary_key_idx -= 1;
+        }
+        Ok(())
+    }
+
+    /// Drop a column from a relationship table.
+    pub fn drop_column_from_rel_table(
+        &mut self,
+        table_name: &str,
+        col_name: &str,
+    ) -> Result<(), GqliteError> {
+        let entry = self
+            .rel_tables
+            .iter_mut()
+            .find(|t| t.name == table_name)
+            .ok_or_else(|| GqliteError::Other(format!("rel table '{}' not found", table_name)))?;
+        let pos = entry
+            .columns
+            .iter()
+            .position(|c| c.name == col_name)
+            .ok_or_else(|| {
+                GqliteError::Other(format!(
+                    "column '{}' not found in table '{}'",
+                    col_name, table_name
+                ))
+            })?;
+        entry.columns.remove(pos);
+        Ok(())
+    }
+
+    /// Rename a table (node or rel).
+    pub fn rename_table(
+        &mut self,
+        old_name: &str,
+        new_name: &str,
+    ) -> Result<(), GqliteError> {
+        // Check that new name doesn't conflict
+        if self.node_tables.iter().any(|t| t.name == new_name)
+            || self.rel_tables.iter().any(|t| t.name == new_name)
+        {
+            return Err(GqliteError::Other(format!(
+                "table '{}' already exists",
+                new_name
+            )));
+        }
+        if let Some(entry) = self.node_tables.iter_mut().find(|t| t.name == old_name) {
+            entry.name = new_name.to_string();
+            return Ok(());
+        }
+        if let Some(entry) = self.rel_tables.iter_mut().find(|t| t.name == old_name) {
+            entry.name = new_name.to_string();
+            return Ok(());
+        }
+        Err(GqliteError::Other(format!(
+            "table '{}' not found",
+            old_name
+        )))
+    }
+
+    /// Rename a column in a node table.
+    pub fn rename_column_in_node_table(
+        &mut self,
+        table_name: &str,
+        old_col: &str,
+        new_col: &str,
+    ) -> Result<(), GqliteError> {
+        let entry = self
+            .node_tables
+            .iter_mut()
+            .find(|t| t.name == table_name)
+            .ok_or_else(|| GqliteError::Other(format!("node table '{}' not found", table_name)))?;
+        if entry.columns.iter().any(|c| c.name == new_col) {
+            return Err(GqliteError::Other(format!(
+                "column '{}' already exists in table '{}'",
+                new_col, table_name
+            )));
+        }
+        let col = entry
+            .columns
+            .iter_mut()
+            .find(|c| c.name == old_col)
+            .ok_or_else(|| {
+                GqliteError::Other(format!(
+                    "column '{}' not found in table '{}'",
+                    old_col, table_name
+                ))
+            })?;
+        col.name = new_col.to_string();
+        Ok(())
+    }
+
+    /// Rename a column in a relationship table.
+    pub fn rename_column_in_rel_table(
+        &mut self,
+        table_name: &str,
+        old_col: &str,
+        new_col: &str,
+    ) -> Result<(), GqliteError> {
+        let entry = self
+            .rel_tables
+            .iter_mut()
+            .find(|t| t.name == table_name)
+            .ok_or_else(|| GqliteError::Other(format!("rel table '{}' not found", table_name)))?;
+        if entry.columns.iter().any(|c| c.name == new_col) {
+            return Err(GqliteError::Other(format!(
+                "column '{}' already exists in table '{}'",
+                new_col, table_name
+            )));
+        }
+        let col = entry
+            .columns
+            .iter_mut()
+            .find(|c| c.name == old_col)
+            .ok_or_else(|| {
+                GqliteError::Other(format!(
+                    "column '{}' not found in table '{}'",
+                    old_col, table_name
+                ))
+            })?;
+        col.name = new_col.to_string();
+        Ok(())
     }
 
     // ── Plan 007: bincode persistence ───────────────────────────────
