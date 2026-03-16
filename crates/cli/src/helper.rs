@@ -1,7 +1,9 @@
 use rustyline::completion::{Completer, Pair};
 use rustyline::hint::Hinter;
 use rustyline::Context;
-use rustyline::{Helper, Highlighter, Validator};
+use rustyline::highlight::Highlighter;
+use rustyline::{Helper, Validator};
+use std::borrow::Cow;
 
 const DOT_COMMANDS: &[&str] = &[
     ".checkpoint", ".database", ".exit", ".help", ".open", ".quit", ".schema", ".tables",
@@ -29,8 +31,15 @@ const CYPHER_KEYWORDS: &[&str] = &[
     "WHEN", "WHERE", "WITH",
 ];
 
-#[derive(Helper, Highlighter, Validator)]
+#[derive(Helper, Validator)]
 pub struct GqliteHelper;
+
+impl Highlighter for GqliteHelper {
+    fn highlight_hint<'h>(&self, hint: &'h str) -> Cow<'h, str> {
+        // ANSI: 90 = bright black (dark gray)
+        Cow::Owned(format!("\x1b[90m{hint}\x1b[0m"))
+    }
+}
 
 impl GqliteHelper {
     fn find_matches(line: &str, pos: usize) -> (usize, Vec<String>) {
