@@ -246,6 +246,8 @@ pub enum Token {
     Semicolon,
     #[token("|")]
     Pipe,
+    #[token("=~")]
+    RegexMatch,
 
     /// Sentinel for end-of-input (not emitted by logos).
     Eof,

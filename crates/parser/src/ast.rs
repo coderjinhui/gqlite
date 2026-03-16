@@ -369,6 +369,7 @@ pub enum BinOp {
     Mod,
     And,
     Or,
+    RegexMatch,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

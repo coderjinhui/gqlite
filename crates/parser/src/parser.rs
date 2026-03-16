@@ -948,6 +948,7 @@ impl Parser {
             Token::Gt => Some(BinOp::Gt),
             Token::Le => Some(BinOp::Le),
             Token::Ge => Some(BinOp::Ge),
+            Token::RegexMatch => Some(BinOp::RegexMatch),
             _ => None,
         };
 

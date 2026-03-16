@@ -2335,6 +2335,14 @@ fn eval_binary_op(left: &Value, op: &BinOp, right: &Value) -> Result<Value, Gqli
             (Value::Bool(a), Value::Bool(b)) => Ok(Value::Bool(*a || *b)),
             _ => Ok(Value::Null),
         },
+        BinOp::RegexMatch => match (left, right) {
+            (Value::String(s), Value::String(pattern)) => {
+                let re = regex::Regex::new(pattern)
+                    .map_err(|e| GqliteError::Execution(format!("invalid regex: {}", e)))?;
+                Ok(Value::Bool(re.is_match(s)))
+            }
+            _ => Err(GqliteError::Execution("=~ requires string operands".into())),
+        },
     }
 }
 

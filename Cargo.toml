@@ -19,5 +19,6 @@ ahash = "0.8"
 parking_lot = "0.12"
 crc32fast = "1"
 rayon = "1"
+regex = "1"
 gqlite-core = { path = "crates/core" }
 gqlite-parser = { path = "crates/parser" }
