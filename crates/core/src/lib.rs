@@ -57,10 +57,37 @@ impl Default for Storage {
     }
 }
 
+// ── DatabaseConfig ──────────────────────────────────────────────
+
+/// Configuration options for a gqlite database.
+#[derive(Debug, Clone)]
+pub struct DatabaseConfig {
+    /// Buffer pool size in bytes. Default: 256 MB.
+    pub buffer_pool_size: usize,
+    /// Whether to open in read-only mode (writes are rejected). Default: false.
+    pub read_only: bool,
+    /// Whether to enable auto-checkpoint after write transactions. Default: true.
+    pub auto_checkpoint: bool,
+    /// Number of WAL records before triggering auto-checkpoint. Default: 10_000.
+    pub checkpoint_threshold: u64,
+}
+
+impl Default for DatabaseConfig {
+    fn default() -> Self {
+        Self {
+            buffer_pool_size: 256 * 1024 * 1024, // 256 MB
+            read_only: false,
+            auto_checkpoint: true,
+            checkpoint_threshold: 10_000,
+        }
+    }
+}
+
 // ── DatabaseInner ───────────────────────────────────────────────
 
 pub(crate) struct DatabaseInner {
     pub(crate) path: PathBuf,
+    pub(crate) config: DatabaseConfig,
     pub(crate) catalog: RwLock<Catalog>,
     pub(crate) storage: RwLock<Storage>,
     pub(crate) txn_manager: TransactionManager,
@@ -75,44 +102,54 @@ pub(crate) struct DatabaseInner {
 /// Database is `Clone + Send + Sync` via `Arc<DatabaseInner>`.
 #[derive(Clone)]
 pub struct Database {
-    inner: Arc<DatabaseInner>,
+    pub(crate) inner: Arc<DatabaseInner>,
 }
 
 impl Database {
-    /// Open (or create) a database at the given path.
-    ///
-    /// If a WAL file (`.graph.wal`) exists, committed transactions are replayed
-    /// to rebuild state (crash recovery).
+    /// Open (or create) a database at the given path with default configuration.
     pub fn open<P: AsRef<Path>>(path: P) -> Result<Self, GqliteError> {
+        Self::open_with_config(path, DatabaseConfig::default())
+    }
+
+    /// Open (or create) a database at the given path with custom configuration.
+    pub fn open_with_config<P: AsRef<Path>>(
+        path: P,
+        config: DatabaseConfig,
+    ) -> Result<Self, GqliteError> {
         let path = path.as_ref().to_path_buf();
         let wal_path = transaction::wal::wal_path_for(&path);
 
         let mut catalog = Catalog::new();
         let mut storage = Storage::new();
+        let mut max_committed_id = 0u64;
 
         // Recovery: replay WAL if it exists
         if wal_path.exists() {
             let mut reader = transaction::wal::WalReader::open(&wal_path)?;
             let records = reader.read_all()?;
             if !records.is_empty() {
-                transaction::wal::replay_wal(&records, &mut catalog, &mut storage)?;
+                max_committed_id =
+                    transaction::wal::replay_wal(&records, &mut catalog, &mut storage)?;
             }
         }
 
         // Open (or create) the WAL for subsequent writes
-        let wal = if wal_path.exists() {
-            WalWriter::open_append(&wal_path)?
+        let wal = if config.read_only {
+            None
+        } else if wal_path.exists() {
+            Some(WalWriter::open_append(&wal_path)?)
         } else {
-            WalWriter::create(&wal_path)?
+            Some(WalWriter::create(&wal_path)?)
         };
 
         Ok(Self {
             inner: Arc::new(DatabaseInner {
                 path,
+                config,
                 catalog: RwLock::new(catalog),
                 storage: RwLock::new(storage),
-                txn_manager: TransactionManager::new(),
-                wal: Mutex::new(Some(wal)),
+                txn_manager: TransactionManager::with_recovered_state(max_committed_id),
+                wal: Mutex::new(wal),
             }),
         })
     }
@@ -122,6 +159,7 @@ impl Database {
         Self {
             inner: Arc::new(DatabaseInner {
                 path: PathBuf::from(":memory:"),
+                config: DatabaseConfig::default(),
                 catalog: RwLock::new(Catalog::new()),
                 storage: RwLock::new(Storage::new()),
                 txn_manager: TransactionManager::new(),
@@ -151,6 +189,11 @@ impl Database {
     /// Return the file path of this database.
     pub fn path(&self) -> &Path {
         &self.inner.path
+    }
+
+    /// Return the database configuration.
+    pub fn config(&self) -> &DatabaseConfig {
+        &self.inner.config
     }
 
     /// List all node table names.
@@ -304,6 +347,15 @@ impl Connection {
     /// - Read-only plans use a read-only transaction.
     /// - Mutating plans (DML/DDL) acquire the write lock and write WAL records.
     pub fn execute(&self, gql: &str) -> Result<QueryResult, GqliteError> {
+        self.execute_with_params(gql, HashMap::new())
+    }
+
+    /// Execute a GQL statement with parameter bindings.
+    pub fn execute_with_params(
+        &self,
+        gql: &str,
+        params: HashMap<String, Value>,
+    ) -> Result<QueryResult, GqliteError> {
         // 1. Parse
         let stmt = Parser::parse_query(gql)?;
 
@@ -312,19 +364,27 @@ impl Connection {
         let mut binder = Binder::new(&catalog);
         let bound = binder.bind(&stmt)?;
 
-        // 3. Plan (logical)
+        // 3. Plan (logical) + optimize
         let planner = Planner::new(&catalog);
         let logical = planner.plan(&bound)?;
+        let logical = planner::optimizer::optimize(logical);
 
         // 4. Physical plan
         let physical = physical::to_physical(&logical);
         drop(catalog); // release read lock before execution
 
+        // 4b. Reject writes in read-only mode
+        if !physical.is_read_only() && self.db.config.read_only {
+            return Err(GqliteError::Execution(
+                "database is opened in read-only mode".into(),
+            ));
+        }
+
         // 5. Auto-transaction + Execute
-        let engine = Engine::new();
         if physical.is_read_only() {
             let mut txn = self.db.txn_manager.begin_read_only();
-            let result = engine.execute_plan(&physical, &self.db, txn.id);
+            let engine = Engine::with_snapshot(txn.start_ts, params);
+            let result = engine.execute_plan_parallel(&physical, &self.db, txn.id);
             match &result {
                 Ok(_) => self.db.txn_manager.commit(&mut txn),
                 Err(_) => self.db.txn_manager.rollback(&mut txn),
@@ -333,6 +393,7 @@ impl Connection {
         } else {
             let (mut txn, _write_guard) = self.db.txn_manager.begin_read_write()?;
             let txn_id = txn.id;
+            let engine = Engine::with_snapshot(txn.start_ts, params);
             let result = engine.execute_plan(&physical, &self.db, txn_id);
             match &result {
                 Ok(_) => {
@@ -354,9 +415,83 @@ impl Connection {
         }
     }
 
+    /// Prepare a GQL statement for later execution with parameter bindings.
+    pub fn prepare(&self, gql: &str) -> Result<PreparedStatement, GqliteError> {
+        let stmt = Parser::parse_query(gql)?;
+
+        let catalog = self.db.catalog.read().unwrap();
+        let mut binder = Binder::new(&catalog);
+        let bound = binder.bind(&stmt)?;
+
+        let planner = Planner::new(&catalog);
+        let logical = planner.plan(&bound)?;
+        let logical = planner::optimizer::optimize(logical);
+        let physical = physical::to_physical(&logical);
+
+        Ok(PreparedStatement {
+            db: self.db.clone(),
+            plan: physical,
+        })
+    }
+
     /// Execute a query and return results (alias for execute).
     pub fn query(&self, gql: &str) -> Result<QueryResult, GqliteError> {
         self.execute(gql)
+    }
+}
+
+// ── PreparedStatement ────────────────────────────────────────────
+
+/// A pre-compiled GQL statement that can be executed multiple times with
+/// different parameter bindings.
+pub struct PreparedStatement {
+    db: Arc<DatabaseInner>,
+    plan: planner::physical::PhysicalPlan,
+}
+
+impl PreparedStatement {
+    /// Execute the prepared statement with parameter bindings.
+    ///
+    /// Parameters are passed as a map of `$name` → Value.
+    pub fn execute(&self, params: HashMap<String, Value>) -> Result<QueryResult, GqliteError> {
+        let txn_manager = &self.db.txn_manager;
+
+        if self.plan.is_read_only() {
+            let mut txn = txn_manager.begin_read_only();
+            let engine = Engine::with_snapshot(txn.start_ts, params);
+            let result = engine.execute_plan_parallel(&self.plan, &self.db, txn.id);
+            match &result {
+                Ok(_) => txn_manager.commit(&mut txn),
+                Err(_) => txn_manager.rollback(&mut txn),
+            }
+            result
+        } else {
+            let (mut txn, _write_guard) = txn_manager.begin_read_write()?;
+            let txn_id = txn.id;
+            let engine = Engine::with_snapshot(txn.start_ts, params);
+            let result = engine.execute_plan(&self.plan, &self.db, txn_id);
+            match &result {
+                Ok(_) => {
+                    let mut wal_guard = self.db.wal.lock();
+                    if let Some(wal) = wal_guard.as_mut() {
+                        wal.append(&WalRecord {
+                            txn_id,
+                            payload: WalPayload::TxnCommit,
+                        })?;
+                    }
+                    txn_manager.commit(&mut txn);
+                }
+                Err(_) => {
+                    txn_manager.rollback(&mut txn);
+                }
+            }
+            result
+        }
+    }
+
+    /// Whether the prepared statement is read-only.
+    pub fn is_read_only(&self) -> bool {
+        self.plan.is_read_only()
     }
 }
 
