@@ -20,3 +20,10 @@ Thumbs.db
 
 research/
 docs/
+
+node_modules/
+
+# Tauri / Frontend build artifacts
+**/dist/
+**/src-tauri/target/
+**/src-tauri/gen/

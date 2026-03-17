@@ -24,6 +24,7 @@ Query: GQL String
 | gqlite-parser | `crates/parser/` | 独立 Cypher 解析器：Lexer, AST, Parser, DataType |
 | gqlite-core | `crates/core/` | 引擎核心：存储、规划、执行、事务（依赖 gqlite-parser） |
 | gqlite-cli | `crates/cli/` | 交互式 REPL (rustyline)，Tab 补全 + 多语句执行 |
+| gqlite-gui | `crates/gui/` | 桌面 GUI 管理工具 (Tauri v2 + Svelte 5 + G6 图可视化) |
 
 每个 crate 必须包含：`Cargo.toml` + `src/` + `tests/` + `doc/`
 
@@ -81,6 +82,7 @@ Query: GQL String
 - **P1 并行+路径 (057-060)**: ✅ 全部完成 (Pipeline切分 + rayon并行 + 可变长路径 + MVCC)
 - **P2 图查询算法 (061a-061r)**: ✅ 全部完成 (CASE/IN/EXISTS/正则/列表推导 + 图算法 8 种 + 数学函数 + 日期时间 + 子查询)
 - **Post-plan 增强**: ✅ CLI 多语句执行（分号分隔）+ 各 crate `doc/` 文档
+- **GUI 桌面工具**: ✅ Tauri v2 + Svelte 5 + CodeMirror + @antv/G6 图可视化
 
 ## 关键设计决策
 
