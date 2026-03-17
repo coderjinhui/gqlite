@@ -23,6 +23,23 @@ impl Parser {
         parser.parse()
     }
 
+    /// Parse a raw query string that may contain multiple semicolon-separated
+    /// statements. Returns all parsed statements in order.
+    pub fn parse_all(input: &str) -> Result<Vec<Statement>, ParseError> {
+        let tokens = super::token::tokenize(input)
+            .map_err(|e| ParseError::Lex(e))?;
+        let mut parser = Parser::new(tokens);
+        let mut stmts = Vec::new();
+        // Skip leading semicolons
+        while parser.check(&Token::Semicolon) {
+            parser.advance();
+        }
+        while parser.peek() != &Token::Eof {
+            stmts.push(parser.parse()?);
+        }
+        Ok(stmts)
+    }
+
     /// Parse the token stream into a Statement.
     pub fn parse(&mut self) -> Result<Statement, ParseError> {
         // Skip leading semicolons

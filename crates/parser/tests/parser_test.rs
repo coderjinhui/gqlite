@@ -670,3 +670,57 @@ fn call_subquery_empty_body_errors() {
     assert!(err.contains("expected clauses inside CALL { ... }"));
 }
 
+// ── parse_all (multi-statement) tests ────────────────────────
+
+#[test]
+fn parse_all_single_statement() {
+    let stmts = Parser::parse_all("MATCH (n) RETURN n;").unwrap();
+    assert_eq!(stmts.len(), 1);
+}
+
+#[test]
+fn parse_all_multiple_statements() {
+    let stmts = Parser::parse_all(
+        "CREATE NODE TABLE A(id INT64, PRIMARY KEY(id)); \
+         CREATE NODE TABLE B(id INT64, PRIMARY KEY(id));"
+    ).unwrap();
+    assert_eq!(stmts.len(), 2);
+}
+
+#[test]
+fn parse_all_mixed_ddl_and_dml() {
+    let stmts = Parser::parse_all(
+        "CREATE NODE TABLE N(id INT64, PRIMARY KEY(id)); \
+         CREATE (n:N {id: 1}); \
+         MATCH (n:N) RETURN n.id;"
+    ).unwrap();
+    assert_eq!(stmts.len(), 3);
+}
+
+#[test]
+fn parse_all_no_trailing_semicolon() {
+    let stmts = Parser::parse_all(
+        "CREATE NODE TABLE A(id INT64, PRIMARY KEY(id)); \
+         MATCH (n) RETURN n"
+    ).unwrap();
+    assert_eq!(stmts.len(), 2);
+}
+
+#[test]
+fn parse_all_extra_semicolons() {
+    let stmts = Parser::parse_all(";;; MATCH (n) RETURN n ;;; MATCH (m) RETURN m ;;;").unwrap();
+    assert_eq!(stmts.len(), 2);
+}
+
+#[test]
+fn parse_all_empty_input() {
+    let stmts = Parser::parse_all("").unwrap();
+    assert_eq!(stmts.len(), 0);
+}
+
+#[test]
+fn parse_all_only_semicolons() {
+    let stmts = Parser::parse_all(";;;").unwrap();
+    assert_eq!(stmts.len(), 0);
+}
+

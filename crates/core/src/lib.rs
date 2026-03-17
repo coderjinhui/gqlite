@@ -321,6 +321,14 @@ impl Database {
         conn.execute(gql)
     }
 
+    /// Execute a script containing multiple semicolon-separated GQL statements.
+    /// Returns the result of the last statement, or an empty result if no statements.
+    /// Stops on the first error.
+    pub fn execute_script(&self, script: &str) -> Result<QueryResult, GqliteError> {
+        let conn = self.connect();
+        conn.execute_script(script)
+    }
+
     /// Convenience: execute a read-only query.
     pub fn query(&self, gql: &str) -> Result<QueryResult, GqliteError> {
         self.execute(gql)
@@ -437,16 +445,35 @@ impl Connection {
         self.execute_with_params(gql, HashMap::new())
     }
 
+    /// Execute a script containing multiple semicolon-separated GQL statements.
+    /// Returns the result of the last statement, or an empty result if no statements.
+    /// Stops on the first error.
+    pub fn execute_script(&self, script: &str) -> Result<QueryResult, GqliteError> {
+        let stmts = Parser::parse_all(script)?;
+        let mut last_result = QueryResult::empty();
+        for stmt in &stmts {
+            last_result = self.execute_statement(stmt, HashMap::new())?;
+        }
+        Ok(last_result)
+    }
+
     /// Execute a GQL statement with parameter bindings.
     pub fn execute_with_params(
         &self,
         gql: &str,
         params: HashMap<String, Value>,
     ) -> Result<QueryResult, GqliteError> {
-        use crate::parser::ast::Statement as AstStatement;
-
-        // 1. Parse
         let stmt = Parser::parse_query(gql)?;
+        self.execute_statement(&stmt, params)
+    }
+
+    /// Execute a pre-parsed statement with parameter bindings.
+    fn execute_statement(
+        &self,
+        stmt: &crate::parser::ast::Statement,
+        params: HashMap<String, Value>,
+    ) -> Result<QueryResult, GqliteError> {
+        use crate::parser::ast::Statement as AstStatement;
 
         // Handle CALL procedure directly (bypasses binder/planner)
         if let AstStatement::Call { procedure, args, yields } = &stmt {

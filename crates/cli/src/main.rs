@@ -153,15 +153,16 @@ fn main() {
                     continue;
                 }
 
-                let query = buf.trim().trim_end_matches(';').trim().to_string();
-                let _ = rl.add_history_entry(&query);
+                let input = buf.trim().to_string();
+                let _ = rl.add_history_entry(input.trim_end_matches(';').trim());
                 buf.clear();
 
-                if query.is_empty() {
+                if input.is_empty() {
                     continue;
                 }
 
-                execute_and_print(&db, &query);
+                // Split by semicolons and execute each statement
+                execute_script(&db, &input);
             }
             Err(ReadlineError::Eof | ReadlineError::Interrupted) => break,
             Err(e) => {
@@ -176,6 +177,41 @@ fn main() {
 }
 
 // ── 查询执行与输出格式化 ──────────────────────────────────────
+
+fn execute_script(db: &Database, input: &str) {
+    let parts = split_by_semicolons(input);
+    for stmt_text in parts {
+        execute_and_print(db, stmt_text);
+    }
+}
+
+/// Split input by top-level semicolons, respecting single-quoted strings.
+fn split_by_semicolons(input: &str) -> Vec<&str> {
+    let mut parts = Vec::new();
+    let mut start = 0;
+    let mut in_string = false;
+
+    for (i, c) in input.char_indices() {
+        match c {
+            '\'' => in_string = !in_string,
+            ';' if !in_string => {
+                let part = input[start..i].trim();
+                if !part.is_empty() {
+                    parts.push(part);
+                }
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+
+    let tail = input[start..].trim();
+    if !tail.is_empty() {
+        parts.push(tail);
+    }
+
+    parts
+}
 
 fn execute_and_print(db: &Database, query: &str) {
     let start = Instant::now();
