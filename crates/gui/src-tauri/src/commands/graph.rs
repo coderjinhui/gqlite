@@ -94,8 +94,10 @@ pub fn get_graph_data(
     // Fetch edges if rel_table is specified
     let mut edges = Vec::new();
     if let Some(ref rt) = rel_table {
+        // Note: gqlite does not support RETURN on relationship variables (r),
+        // so we only return the source and target node InternalIds.
         let edge_gql = format!(
-            "MATCH (a:{})-[r:{}]->(b) RETURN a, r, b LIMIT {}",
+            "MATCH (a:{})-[:{}]->(b) RETURN a, b LIMIT {}",
             node_table, rt, limit
         );
         let edge_result = db.execute(&edge_gql).map_err(|e| e.to_string())?;
@@ -103,28 +105,25 @@ pub fn get_graph_data(
         for row in edge_result.rows() {
             let mut source_id = String::new();
             let mut target_id = String::new();
-            let mut edge_props = serde_json::Map::new();
 
-            if row.values.len() >= 3 {
+            if row.values.len() >= 2 {
                 // Column 0: a (source InternalId)
                 if let Value::InternalId(id) = &row.values[0] {
                     source_id = format!("{}:{}", id.table_id, id.offset);
                 }
-                // Column 2: b (target InternalId)
-                if let Value::InternalId(id) = &row.values[2] {
+                // Column 1: b (target InternalId)
+                if let Value::InternalId(id) = &row.values[1] {
                     target_id = format!("{}:{}", id.table_id, id.offset);
                 }
-                // Column 1: r (relationship — may be InternalId or other value)
-                edge_props.insert("_rel".to_string(), value_to_json(&row.values[1]));
             }
 
             if !source_id.is_empty() && !target_id.is_empty() {
-                // Also ensure both endpoints exist as nodes
+                // Ensure both endpoints exist as nodes
                 // (target might be in a different table — add it if missing)
                 if !node_ids.contains(&target_id) {
                     node_ids.insert(target_id.clone());
                     let mut tp = serde_json::Map::new();
-                    tp.insert("_id".to_string(), value_to_json(&row.values[2]));
+                    tp.insert("_id".to_string(), value_to_json(&row.values[1]));
                     nodes.push(GraphNode {
                         id: target_id.clone(),
                         label: "?".to_string(),
@@ -136,7 +135,7 @@ pub fn get_graph_data(
                     source: source_id,
                     target: target_id,
                     label: rt.clone(),
-                    properties: edge_props,
+                    properties: serde_json::Map::new(),
                 });
             }
         }

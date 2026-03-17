@@ -16,6 +16,7 @@
   let nodeLimit = $state(200);
   let graphData = $state<GraphData | null>(null);
   let loading = $state(false);
+  let errorMsg = $state("");
   let graphInstance: any = null;
 
   // Node table color palette
@@ -27,6 +28,7 @@
   async function loadGraph() {
     if (!selectedNodeTable) return;
     loading = true;
+    errorMsg = "";
     try {
       graphData = await getGraphData(
         selectedNodeTable,
@@ -35,6 +37,7 @@
       );
       await renderGraph();
     } catch (e: any) {
+      errorMsg = e.toString();
       console.error("Graph load error:", e);
     }
     loading = false;
@@ -203,7 +206,12 @@
 
   <!-- Graph area -->
   <div class="flex-1 relative" style="background: var(--bg-primary);">
-    {#if !graphData}
+    {#if errorMsg}
+      <div class="absolute top-2 left-2 right-2 z-10 text-xs px-3 py-2 rounded" style="background: var(--error-color); color: white;">
+        {errorMsg}
+      </div>
+    {/if}
+    {#if !graphData && !errorMsg}
       <div class="flex items-center justify-center h-full text-xs" style="color: var(--text-muted);">
         {$tt("graph.no_data")}
       </div>
