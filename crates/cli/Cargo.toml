@@ -10,6 +10,10 @@ license.workspace = true
 name = "gqlite"
 path = "src/main.rs"
 
+[lib]
+name = "gqlite_cli"
+path = "src/lib.rs"
+
 [dependencies]
 gqlite-core = { workspace = true }
 rustyline = { version = "14", features = ["derive"] }

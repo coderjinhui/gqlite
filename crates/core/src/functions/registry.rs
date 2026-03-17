@@ -7,6 +7,7 @@ use crate::types::value::Value;
 
 use super::scalar;
 use super::aggregate;
+use super::datetime;
 
 /// A scalar function: takes a list of values, returns one value.
 pub type ScalarFn = fn(&[Value]) -> Result<Value, GqliteError>;
@@ -59,6 +60,26 @@ impl FunctionRegistry {
         self.register_scalar("list_sort", scalar::fn_list_sort);
         self.register_scalar("list_distinct", scalar::fn_list_distinct);
         self.register_scalar("range", scalar::fn_range);
+        // Path functions
+        self.register_scalar("nodes", scalar::fn_nodes);
+        // Math functions
+        self.register_scalar("ceil", scalar::fn_ceil);
+        self.register_scalar("floor", scalar::fn_floor);
+        self.register_scalar("round", scalar::fn_round);
+        self.register_scalar("sqrt", scalar::fn_sqrt);
+        self.register_scalar("log", scalar::fn_log);
+        self.register_scalar("log10", scalar::fn_log10);
+        self.register_scalar("sign", scalar::fn_sign);
+        self.register_scalar("rand", scalar::fn_rand);
+        self.register_scalar("pi", scalar::fn_pi);
+        self.register_scalar("e", scalar::fn_e);
+        // Conversion functions
+        self.register_scalar("tointeger", scalar::fn_to_integer);
+        self.register_scalar("tofloat", scalar::fn_to_float);
+        // Date/time functions
+        self.register_scalar("date", datetime::fn_date);
+        self.register_scalar("datetime", datetime::fn_datetime);
+        self.register_scalar("timestamp", datetime::fn_timestamp);
     }
 
     fn register_scalar(&mut self, name: &str, f: ScalarFn) {

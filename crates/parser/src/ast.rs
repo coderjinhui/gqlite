@@ -18,6 +18,11 @@ pub enum Statement {
         right: Box<Statement>,
         all: bool,
     },
+    Call {
+        procedure: String,
+        args: Vec<Expr>,
+        yields: Vec<String>,
+    },
 }
 
 // ── Query Statement ─────────────────────────────────────────────
@@ -42,6 +47,8 @@ pub enum Clause {
     Delete(DeleteClause),
     Unwind(UnwindClause),
     Merge(MergeClause),
+    /// CALL { subquery } — execute an inner query and pipe results into the outer query.
+    CallSubquery(QueryStatement),
 }
 
 // ── MATCH ───────────────────────────────────────────────────────
@@ -56,6 +63,19 @@ pub struct MatchClause {
 #[derive(Debug, Clone)]
 pub struct GraphPattern {
     pub paths: Vec<PathPattern>,
+    /// `p = shortestPath((a)-[:REL*..N]->(b))` assignments in MATCH.
+    pub shortest_paths: Vec<ShortestPathPattern>,
+}
+
+/// A `shortestPath(...)` or `allShortestPaths(...)` pattern assignment.
+#[derive(Debug, Clone)]
+pub struct ShortestPathPattern {
+    /// The variable name bound to the path (e.g., `p` in `p = shortestPath(...)`).
+    pub path_variable: String,
+    /// The inner path pattern describing the traversal.
+    pub pattern: PathPattern,
+    /// `false` for `shortestPath`, `true` for `allShortestPaths`.
+    pub all_paths: bool,
 }
 
 /// A chain of alternating node and relationship patterns.
@@ -318,6 +338,29 @@ pub enum Expr {
         expr: Box<Expr>,
         target_type: DataType,
     },
+    /// CASE expression (searched and simple forms).
+    /// - Searched: `CASE WHEN cond THEN result [ELSE default] END`
+    /// - Simple:   `CASE operand WHEN value THEN result [ELSE default] END`
+    Case {
+        operand: Option<Box<Expr>>,
+        when_clauses: Vec<(Expr, Expr)>,
+        else_result: Option<Box<Expr>>,
+    },
+    /// IN list expression: expr [NOT] IN [list]
+    In {
+        expr: Box<Expr>,
+        list: Box<Expr>,
+        negated: bool,
+    },
+    /// EXISTS { subquery } — evaluates to true if the subquery returns at least one row.
+    Exists(Box<QueryStatement>),
+    /// List comprehension: [variable IN list WHERE filter | map_expr]
+    ListComprehension {
+        variable: String,
+        list: Box<Expr>,
+        filter: Option<Box<Expr>>,
+        map_expr: Option<Box<Expr>>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -335,6 +378,7 @@ pub enum BinOp {
     Mod,
     And,
     Or,
+    RegexMatch,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

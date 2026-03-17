@@ -16,6 +16,11 @@ use crate::types::graph::InternalId;
 use crate::types::value::Value;
 use crate::{ColumnInfo, DatabaseInner, QueryResult, Row};
 
+// Imports for EXISTS subquery evaluation
+use crate::binder::Binder;
+use crate::planner::logical::Planner;
+use crate::planner::{optimizer, physical};
+
 // ── Intermediate result ─────────────────────────────────────────
 
 /// Intermediate columnar result produced during operator evaluation.
@@ -61,6 +66,11 @@ pub struct Engine {
     /// MVCC snapshot timestamp for visibility checks.
     /// Rows with `create_ts <= start_ts` and `delete_ts == 0 || delete_ts > start_ts` are visible.
     start_ts: u64,
+    /// Database reference for correlated subqueries (EXISTS).
+    db: Option<Arc<DatabaseInner>>,
+    /// Outer scope bindings for correlated subqueries (EXISTS).
+    /// Each entry: (column_names, row_values) representing the outer row.
+    outer_scope: Option<(Vec<String>, Vec<Value>)>,
 }
 
 impl Engine {
@@ -68,6 +78,8 @@ impl Engine {
         Self {
             params: HashMap::new(),
             start_ts: u64::MAX, // legacy: see everything
+            db: None,
+            outer_scope: None,
         }
     }
 
@@ -75,12 +87,19 @@ impl Engine {
         Self {
             params,
             start_ts: u64::MAX,
+            db: None,
+            outer_scope: None,
         }
     }
 
     /// Create an engine with MVCC snapshot and optional parameters.
     pub fn with_snapshot(start_ts: u64, params: HashMap<String, Value>) -> Self {
-        Self { params, start_ts }
+        Self { params, start_ts, db: None, outer_scope: None }
+    }
+
+    /// Set the database reference for correlated subquery evaluation (EXISTS).
+    pub fn set_db(&mut self, db: Arc<DatabaseInner>) {
+        self.db = Some(db);
     }
 
     /// Execute a physical plan against the database, returning a QueryResult.
@@ -572,6 +591,34 @@ impl Engine {
                 )
             }
 
+            PhysicalPlan::ShortestPath {
+                input,
+                rel_table_name,
+                rel_table_id,
+                direction,
+                src_alias,
+                dst_alias,
+                path_alias,
+                dst_table_id,
+                max_hops,
+                all_paths,
+            } => {
+                let input_result = self.execute_operator(input, db, txn_id)?;
+                self.exec_shortest_path(
+                    db,
+                    input_result,
+                    rel_table_name,
+                    *rel_table_id,
+                    direction,
+                    src_alias,
+                    dst_alias,
+                    path_alias,
+                    dst_table_id,
+                    *max_hops,
+                    *all_paths,
+                )
+            }
+
             PhysicalPlan::HashJoin { build, probe, .. } => {
                 let build_result = self.execute_operator(build, db, txn_id)?;
                 let probe_result = self.execute_operator(probe, db, txn_id)?;
@@ -590,7 +637,7 @@ impl Engine {
                 rel_table_id,
                 src_alias,
                 dst_alias,
-                properties: _,
+                properties,
             } => {
                 let input_result = self.execute_operator(input, db, txn_id)?;
                 self.exec_insert_rel(
@@ -600,6 +647,7 @@ impl Engine {
                     *rel_table_id,
                     src_alias,
                     dst_alias,
+                    properties,
                     txn_id,
                 )
             }
@@ -664,6 +712,10 @@ impl Engine {
                 on_match,
             } => self.exec_merge(db, table_name, *table_id, properties, on_create, on_match, txn_id),
 
+            PhysicalPlan::CallSubquery { input, subquery } => {
+                self.exec_call_subquery(input, subquery, db, txn_id)
+            }
+
             // DDL handled in execute_plan
             PhysicalPlan::CreateNodeTable { .. }
             | PhysicalPlan::CreateRelTable { .. }
@@ -687,6 +739,11 @@ impl Engine {
     ) -> Result<Intermediate, GqliteError> {
         // Handle unlabeled node scan (no table specified)
         if table_name.is_empty() {
+            // For EXISTS subqueries: check if this alias is bound in the outer scope.
+            // If so, inject the outer row's data for this variable instead of returning empty.
+            if let Some((ref outer_cols, ref outer_row)) = self.outer_scope {
+                return self.inject_outer_scope_scan(db, alias, outer_cols, outer_row);
+            }
             return Ok(Intermediate::empty());
         }
 
@@ -725,6 +782,96 @@ impl Engine {
             columns: col_names,
             types: col_types,
             rows,
+        })
+    }
+
+    /// For EXISTS subqueries: inject outer scope data for an unlabeled node scan.
+    ///
+    /// When the inner query references a variable `p` that exists in the outer scope,
+    /// we look up the outer row's data for that variable (InternalId + properties)
+    /// and return it as a single-row Intermediate, as if the scan found exactly that node.
+    fn inject_outer_scope_scan(
+        &self,
+        db: &Arc<DatabaseInner>,
+        alias: &str,
+        outer_cols: &[String],
+        outer_row: &[Value],
+    ) -> Result<Intermediate, GqliteError> {
+        // Find the outer InternalId column for this alias.
+        // The outer scope has columns like "p" (InternalId) and "p.name", "p.id", etc.
+        // We also look for "p.__internal_id" pattern used by some paths.
+        let internal_id_idx = outer_cols.iter().position(|c| c == alias);
+        let internal_id_val = match internal_id_idx {
+            Some(idx) => match &outer_row[idx] {
+                Value::InternalId(id) => *id,
+                _ => return Ok(Intermediate::empty()),
+            },
+            None => {
+                // Try __internal_id suffix
+                let alt_name = format!("{}.__internal_id", alias);
+                let alt_idx = outer_cols.iter().position(|c| c == &alt_name);
+                match alt_idx {
+                    Some(idx) => match &outer_row[idx] {
+                        Value::InternalId(id) => *id,
+                        _ => return Ok(Intermediate::empty()),
+                    },
+                    None => return Ok(Intermediate::empty()),
+                }
+            }
+        };
+
+        // We found the node. Now reconstruct the scan output as if we scanned just this node.
+        // Look up the node's table to get schema info.
+        let real_table_id = internal_id_val.table_id;
+        let catalog = db.catalog.read().unwrap();
+        let entry = catalog.get_node_table_by_id(real_table_id);
+        let schema = entry.map(|e| e.columns.clone()).unwrap_or_default();
+        drop(catalog);
+
+        // Build column names: alias (InternalId), alias.col1, alias.col2, ...
+        let mut col_names = vec![alias.to_string()];
+        let mut col_types = vec![DataType::InternalId];
+        for col in &schema {
+            col_names.push(format!("{}.{}", alias, col.name));
+            col_types.push(col.data_type.clone());
+        }
+
+        // Build the row: first the InternalId, then property values from the outer row.
+        let mut row_values = vec![Value::InternalId(internal_id_val)];
+        for col in &schema {
+            let prop_col = format!("{}.{}", alias, col.name);
+            if let Some(idx) = outer_cols.iter().position(|c| c == &prop_col) {
+                row_values.push(outer_row[idx].clone());
+            } else {
+                // Property not in outer scope, read from storage directly
+                let storage = db.storage.read().unwrap();
+                if let Some(nt) = storage.node_tables.get(&real_table_id) {
+                    let offset = internal_id_val.offset;
+                    if let Ok(all_vals) = nt.read(offset) {
+                        // Find the column index in the schema
+                        let col_idx = schema.iter().position(|s| s.name == col.name);
+                        if let Some(ci) = col_idx {
+                            if ci < all_vals.len() {
+                                row_values.push(all_vals[ci].clone());
+                            } else {
+                                row_values.push(Value::Null);
+                            }
+                        } else {
+                            row_values.push(Value::Null);
+                        }
+                    } else {
+                        row_values.push(Value::Null);
+                    }
+                } else {
+                    row_values.push(Value::Null);
+                }
+            }
+        }
+
+        Ok(Intermediate {
+            columns: col_names,
+            types: col_types,
+            rows: vec![row_values],
         })
     }
 
@@ -1034,6 +1181,275 @@ impl Engine {
         })
     }
 
+    // ── Shortest Path (BFS with parent tracking) ────────────────
+
+    pub(crate) fn exec_shortest_path(
+        &self,
+        db: &Arc<DatabaseInner>,
+        input: Intermediate,
+        rel_table_name: &str,
+        rel_table_id: u32,
+        direction: &Direction,
+        src_alias: &str,
+        dst_alias: &str,
+        path_alias: &str,
+        dst_table_id: &Option<u32>,
+        max_hops: u32,
+        all_paths: bool,
+    ) -> Result<Intermediate, GqliteError> {
+        use std::collections::{HashMap, HashSet, VecDeque};
+
+        let storage = db.storage.read().unwrap();
+
+        let rel_table = storage.rel_tables.get(&rel_table_id).ok_or_else(|| {
+            GqliteError::Execution(format!("rel table '{}' not found", rel_table_name))
+        })?;
+
+        // Resolve table id for the destination endpoint
+        let dst_tid = dst_table_id.or_else(|| match direction {
+            Direction::Right => Some(rel_table.dst_table_id()),
+            Direction::Left => Some(rel_table.src_table_id()),
+            Direction::Both => Some(rel_table.dst_table_id()),
+        });
+
+        // Find column indices for src and dst aliases in input
+        let src_col = input
+            .columns
+            .iter()
+            .position(|c| c == src_alias)
+            .ok_or_else(|| {
+                GqliteError::Execution(format!(
+                    "source alias '{}' not found in input columns",
+                    src_alias
+                ))
+            })?;
+
+        let dst_col = input
+            .columns
+            .iter()
+            .position(|c| c == dst_alias)
+            .ok_or_else(|| {
+                GqliteError::Execution(format!(
+                    "destination alias '{}' not found in input columns",
+                    dst_alias
+                ))
+            })?;
+
+        // Build output columns: input cols + path_alias (List)
+        let mut out_cols = input.columns.clone();
+        let mut out_types = input.types.clone();
+        out_cols.push(path_alias.to_string());
+        out_types.push(DataType::String); // List type (no dedicated DataType; use String as placeholder)
+
+        let mut out_rows = Vec::new();
+
+        for row in &input.rows {
+            let src_id = match &row[src_col] {
+                Value::InternalId(id) => *id,
+                _ => continue,
+            };
+            let dst_id = match &row[dst_col] {
+                Value::InternalId(id) => *id,
+                _ => continue,
+            };
+
+            // Same node → path of length 0 (only the node itself)
+            if src_id.offset == dst_id.offset && src_id.table_id == dst_id.table_id {
+                let path_value = Value::List(vec![Value::InternalId(src_id)]);
+                let mut new_row = row.clone();
+                new_row.push(path_value);
+                out_rows.push(new_row);
+                continue;
+            }
+
+            let src_table_id = dst_tid.unwrap_or(src_id.table_id);
+
+            if all_paths {
+                // allShortestPaths: BFS with multi-parent tracking
+                let mut frontier: VecDeque<u64> = VecDeque::new();
+                // Each node can have multiple parents (discovered at the same BFS depth)
+                let mut parents: HashMap<u64, Vec<u64>> = HashMap::new();
+                // Track which nodes have been visited (finalized in previous depths)
+                let mut visited: HashSet<u64> = HashSet::new();
+                frontier.push_back(src_id.offset);
+                visited.insert(src_id.offset);
+                let mut found = false;
+                let mut depth: u32 = 0;
+
+                while !frontier.is_empty() && depth < max_hops {
+                    let level_size = frontier.len();
+                    depth += 1;
+
+                    // Nodes discovered at this depth level (not yet in visited)
+                    let mut discovered_this_level: HashSet<u64> = HashSet::new();
+
+                    for _ in 0..level_size {
+                        let current = frontier.pop_front().unwrap();
+
+                        let neighbors = match direction {
+                            Direction::Right => rel_table.get_rels_from(current),
+                            Direction::Left => rel_table.get_rels_to(current),
+                            Direction::Both => {
+                                let mut all = rel_table.get_rels_from(current);
+                                all.extend(rel_table.get_rels_to(current));
+                                all
+                            }
+                        };
+
+                        for (neighbor_offset, _rel_id) in &neighbors {
+                            // Skip nodes finalized in earlier depths
+                            if visited.contains(neighbor_offset) {
+                                continue;
+                            }
+                            // Add current as a parent of neighbor (may add multiple parents)
+                            parents
+                                .entry(*neighbor_offset)
+                                .or_insert_with(Vec::new)
+                                .push(current);
+
+                            if *neighbor_offset == dst_id.offset {
+                                found = true;
+                            }
+
+                            // Only add to frontier once per depth level
+                            if discovered_this_level.insert(*neighbor_offset) {
+                                frontier.push_back(*neighbor_offset);
+                            }
+                        }
+                    }
+
+                    // Move all discovered nodes into visited for the next level
+                    visited.extend(&discovered_this_level);
+
+                    // If target found at this depth, stop BFS (all shortest paths are this length)
+                    if found {
+                        break;
+                    }
+                }
+
+                if found {
+                    // Reconstruct ALL shortest paths via recursive backtracking
+                    let all_node_paths =
+                        Self::reconstruct_all_paths(&parents, src_id.offset, dst_id.offset);
+                    for node_path in all_node_paths {
+                        let path_nodes: Vec<Value> = node_path
+                            .iter()
+                            .map(|&off| Value::InternalId(InternalId::new(src_table_id, off)))
+                            .collect();
+                        let path_value = Value::List(path_nodes);
+                        let mut new_row = row.clone();
+                        new_row.push(path_value);
+                        out_rows.push(new_row);
+                    }
+                }
+            } else {
+                // shortestPath: BFS with single parent tracking (original behavior)
+                let mut frontier: VecDeque<u64> = VecDeque::new();
+                let mut parent: HashMap<u64, u64> = HashMap::new();
+                frontier.push_back(src_id.offset);
+                parent.insert(src_id.offset, u64::MAX); // sentinel for root
+                let mut found = false;
+                let mut depth: u32 = 0;
+
+                'bfs: while !frontier.is_empty() && depth < max_hops {
+                    let level_size = frontier.len();
+                    depth += 1;
+
+                    for _ in 0..level_size {
+                        let current = frontier.pop_front().unwrap();
+
+                        let neighbors = match direction {
+                            Direction::Right => rel_table.get_rels_from(current),
+                            Direction::Left => rel_table.get_rels_to(current),
+                            Direction::Both => {
+                                let mut all = rel_table.get_rels_from(current);
+                                all.extend(rel_table.get_rels_to(current));
+                                all
+                            }
+                        };
+
+                        for (neighbor_offset, _rel_id) in &neighbors {
+                            if parent.contains_key(neighbor_offset) {
+                                continue; // already visited
+                            }
+                            parent.insert(*neighbor_offset, current);
+
+                            if *neighbor_offset == dst_id.offset {
+                                found = true;
+                                break 'bfs;
+                            }
+
+                            frontier.push_back(*neighbor_offset);
+                        }
+                    }
+                }
+
+                if found {
+                    // Reconstruct path by backtracking through parent pointers
+                    let mut path_nodes: Vec<Value> = Vec::new();
+                    let mut current = dst_id.offset;
+                    while current != u64::MAX {
+                        path_nodes.push(Value::InternalId(InternalId::new(
+                            src_table_id,
+                            current,
+                        )));
+                        current = *parent.get(&current).unwrap_or(&u64::MAX);
+                    }
+                    path_nodes.reverse();
+
+                    let path_value = Value::List(path_nodes);
+                    let mut new_row = row.clone();
+                    new_row.push(path_value);
+                    out_rows.push(new_row);
+                }
+            }
+            // If no path found, skip this row (do not emit)
+        }
+
+        Ok(Intermediate {
+            columns: out_cols,
+            types: out_types,
+            rows: out_rows,
+        })
+    }
+
+    /// Reconstruct all shortest paths from `src` to `dst` using the multi-parent map.
+    /// Returns a Vec of paths, where each path is a Vec of node offsets from src to dst.
+    fn reconstruct_all_paths(
+        parents: &std::collections::HashMap<u64, Vec<u64>>,
+        src: u64,
+        dst: u64,
+    ) -> Vec<Vec<u64>> {
+        let mut result = Vec::new();
+        let mut current_path = vec![dst];
+        Self::backtrack_paths(parents, src, dst, &mut current_path, &mut result);
+        result
+    }
+
+    /// Recursive backtracking: enumerate all parent chains from `node` back to `src`.
+    fn backtrack_paths(
+        parents: &std::collections::HashMap<u64, Vec<u64>>,
+        src: u64,
+        node: u64,
+        current_path: &mut Vec<u64>,
+        result: &mut Vec<Vec<u64>>,
+    ) {
+        if node == src {
+            // We've traced back to the source — emit this path (reversed)
+            let mut path = current_path.clone();
+            path.reverse();
+            result.push(path);
+            return;
+        }
+        if let Some(node_parents) = parents.get(&node) {
+            for &p in node_parents {
+                current_path.push(p);
+                Self::backtrack_paths(parents, src, p, current_path, result);
+                current_path.pop();
+            }
+        }
+    }
+
     // ── Cross Join (Task 026 — simplified) ──────────────────────
 
     pub(crate) fn exec_cross_join(
@@ -1136,6 +1552,7 @@ impl Engine {
         rel_table_id: u32,
         src_alias: &str,
         dst_alias: &str,
+        properties: &[(usize, Expr)],
         txn_id: u64,
     ) -> Result<Intermediate, GqliteError> {
         let src_col = input
@@ -1152,6 +1569,15 @@ impl Engine {
             .ok_or_else(|| {
                 GqliteError::Execution(format!("dest alias '{}' not found", dst_alias))
             })?;
+
+        // Determine schema column count from catalog for building property vector
+        let num_schema_cols = {
+            let catalog = db.catalog.read().unwrap();
+            catalog
+                .get_rel_table(rel_table_name)
+                .map(|e| e.columns.len())
+                .unwrap_or(0)
+        };
 
         let mut storage = db.storage.write().unwrap();
         let rel_table = storage.rel_tables.get_mut(&rel_table_id).ok_or_else(|| {
@@ -1176,15 +1602,29 @@ impl Engine {
                 }
             };
 
+            // Build property values vector (aligned with rel table schema)
+            let prop_values = if !properties.is_empty() {
+                let mut vals = vec![Value::Null; num_schema_cols];
+                for (col_idx, expr) in properties {
+                    let val = self.eval_expr(expr, &input.columns, row)?;
+                    if *col_idx < vals.len() {
+                        vals[*col_idx] = val;
+                    }
+                }
+                vals
+            } else {
+                vec![]
+            };
+
             Self::wal_append(db, txn_id, WalPayload::InsertRel {
                 rel_table_name: rel_table_name.to_string(),
                 rel_table_id,
                 src: src_id,
                 dst: dst_id,
-                properties: vec![],
+                properties: prop_values.clone(),
             })?;
 
-            rel_table.insert_rel(src_id, dst_id, &[])?;
+            rel_table.insert_rel(src_id, dst_id, &prop_values)?;
         }
         rel_table.compact();
 
@@ -1563,6 +2003,45 @@ impl Engine {
         })
     }
 
+    // ── CallSubquery ──────────────────────────────────────────────
+
+    pub(crate) fn exec_call_subquery(
+        &self,
+        input: &PhysicalPlan,
+        subquery: &QueryStatement,
+        db: &Arc<DatabaseInner>,
+        txn_id: u64,
+    ) -> Result<Intermediate, GqliteError> {
+        let input_result = self.execute_operator(input, db, txn_id)?;
+
+        // Execute the subquery through the full pipeline (bind → plan → execute)
+        let sub_result = {
+            let catalog = db.catalog.read().unwrap();
+            let mut binder = Binder::new(&catalog);
+            let bound = binder.bind(&Statement::Query(subquery.clone()))?;
+            let planner = Planner::new(&catalog);
+            let logical = planner.plan(&bound)?;
+            let logical = optimizer::optimize(logical);
+            let physical_plan = physical::to_physical(&logical);
+            drop(catalog);
+
+            let mut sub_engine = Engine::with_snapshot(self.start_ts, self.params.clone());
+            if let Some(ref db_arc) = self.db {
+                sub_engine.set_db(db_arc.clone());
+            }
+            sub_engine.execute_operator(&physical_plan, db, txn_id)?
+        };
+
+        // If input is trivial (EmptyResult → no columns and no rows),
+        // return the subquery results directly.
+        if input_result.columns.is_empty() || input_result.rows.is_empty() {
+            return Ok(sub_result);
+        }
+
+        // Cross-join: for each input row, pair with each subquery row
+        self.exec_cross_join(input_result, sub_result)
+    }
+
     // ── Merge (upsert) ─────────────────────────────────────────
 
     fn exec_merge(
@@ -1759,9 +2238,127 @@ impl Engine {
                 cast_value(v, target_type)
             }
 
+            Expr::Case { operand, when_clauses, else_result } => {
+                match operand {
+                    Some(op) => {
+                        // Simple form: CASE operand WHEN value THEN result ...
+                        let op_val = self.eval_expr(op, columns, row)?;
+                        for (when_expr, then_expr) in when_clauses {
+                            let when_val = self.eval_expr(when_expr, columns, row)?;
+                            let eq = eval_binary_op(&op_val, &BinOp::Eq, &when_val)?;
+                            if eq == Value::Bool(true) {
+                                return self.eval_expr(then_expr, columns, row);
+                            }
+                        }
+                    }
+                    None => {
+                        // Searched form: CASE WHEN condition THEN result ...
+                        for (cond_expr, then_expr) in when_clauses {
+                            let cond_val = self.eval_expr(cond_expr, columns, row)?;
+                            if cond_val == Value::Bool(true) {
+                                return self.eval_expr(then_expr, columns, row);
+                            }
+                        }
+                    }
+                }
+                // No WHEN matched — evaluate ELSE or return NULL
+                match else_result {
+                    Some(el) => self.eval_expr(el, columns, row),
+                    None => Ok(Value::Null),
+                }
+            }
+
             Expr::Star => Ok(Value::Null),
             Expr::Param(name) => {
                 Ok(self.params.get(name).cloned().unwrap_or(Value::Null))
+            }
+
+            Expr::In { expr, list, negated } => {
+                let val = self.eval_expr(expr, columns, row)?;
+                let list_val = self.eval_expr(list, columns, row)?;
+                match list_val {
+                    Value::List(items) => {
+                        let found = items.iter().any(|item| {
+                            eval_binary_op(&val, &BinOp::Eq, item)
+                                .map(|v| v == Value::Bool(true))
+                                .unwrap_or(false)
+                        });
+                        Ok(Value::Bool(if *negated { !found } else { found }))
+                    }
+                    Value::Null => Ok(Value::Null),
+                    _ => Err(GqliteError::Execution("IN requires a list".into())),
+                }
+            }
+
+            Expr::Exists(inner_query) => {
+                let db_arc = self.db.as_ref().ok_or_else(|| {
+                    GqliteError::Execution("EXISTS requires database context".into())
+                })?;
+
+                // Bind the inner query against the catalog.
+                let catalog = db_arc.catalog.read().unwrap();
+                let mut binder = Binder::new(&catalog);
+                let bound = binder.bind(&Statement::Query(inner_query.as_ref().clone()))?;
+
+                // Plan (logical) + optimize
+                let planner = Planner::new(&catalog);
+                let logical = planner.plan(&bound)?;
+                let logical = optimizer::optimize(logical);
+
+                // Physical plan
+                let physical_plan = physical::to_physical(&logical);
+                drop(catalog);
+
+                // Execute the inner query with the same snapshot timestamp,
+                // passing the current outer row as scope so that unlabeled node
+                // scans can resolve correlated variables (e.g., `(p)` in the
+                // inner MATCH refers to the outer `p`).
+                let inner_engine = Engine {
+                    params: self.params.clone(),
+                    start_ts: self.start_ts,
+                    db: self.db.clone(),
+                    outer_scope: Some((columns.to_vec(), row.to_vec())),
+                };
+                let inner_txn = db_arc.txn_manager.begin_read_only();
+                let inner_result = inner_engine.execute_operator(
+                    &physical_plan,
+                    db_arc,
+                    inner_txn.id,
+                )?;
+
+                // EXISTS returns true if the inner query produces at least one row.
+                Ok(Value::Bool(!inner_result.rows.is_empty()))
+            }
+
+            Expr::ListComprehension { variable, list, filter, map_expr } => {
+                let list_val = self.eval_expr(list, columns, row)?;
+                match list_val {
+                    Value::List(items) => {
+                        let mut result = Vec::new();
+                        let mut ext_columns: Vec<String> = columns.to_vec();
+                        ext_columns.push(variable.clone());
+                        for item in &items {
+                            let mut ext_row: Vec<Value> = row.to_vec();
+                            ext_row.push(item.clone());
+                            // Apply filter
+                            if let Some(f) = filter {
+                                let cond = self.eval_expr(f, &ext_columns, &ext_row)?;
+                                if cond != Value::Bool(true) {
+                                    continue;
+                                }
+                            }
+                            // Apply map
+                            if let Some(m) = map_expr {
+                                result.push(self.eval_expr(m, &ext_columns, &ext_row)?);
+                            } else {
+                                result.push(item.clone());
+                            }
+                        }
+                        Ok(Value::List(result))
+                    }
+                    Value::Null => Ok(Value::Null),
+                    _ => Err(GqliteError::Execution("list comprehension requires a list".into())),
+                }
             }
         }
     }
@@ -1857,6 +2454,9 @@ fn cast_value(v: Value, target: &DataType) -> Result<Value, GqliteError> {
         },
         DataType::InternalId => Err(GqliteError::Execution(
             "cannot cast to InternalId".into(),
+        )),
+        DataType::Date | DataType::DateTime | DataType::Duration => Err(GqliteError::Execution(
+            format!("cannot cast to {}", target),
         )),
     }
 }
@@ -1954,6 +2554,14 @@ fn eval_binary_op(left: &Value, op: &BinOp, right: &Value) -> Result<Value, Gqli
         BinOp::Or => match (left, right) {
             (Value::Bool(a), Value::Bool(b)) => Ok(Value::Bool(*a || *b)),
             _ => Ok(Value::Null),
+        },
+        BinOp::RegexMatch => match (left, right) {
+            (Value::String(s), Value::String(pattern)) => {
+                let re = regex::Regex::new(pattern)
+                    .map_err(|e| GqliteError::Execution(format!("invalid regex: {}", e)))?;
+                Ok(Value::Bool(re.is_match(s)))
+            }
+            _ => Err(GqliteError::Execution("=~ requires string operands".into())),
         },
     }
 }
@@ -2056,6 +2664,9 @@ fn parse_csv_value(field: &str, dt: &DataType) -> Result<Value, GqliteError> {
         DataType::InternalId => Err(GqliteError::Other(
             "cannot import InternalId from CSV".into(),
         )),
+        DataType::Date | DataType::DateTime | DataType::Duration => Err(GqliteError::Other(
+            format!("cannot import {} from CSV", dt),
+        )),
     }
 }
 
@@ -2073,6 +2684,9 @@ fn value_to_csv_string(v: &Value) -> String {
             format!("[{}]", parts.join(","))
         }
         Value::Bytes(b) => format!("0x{}", b.iter().map(|byte| format!("{:02x}", byte)).collect::<String>()),
+        Value::Date(d) => d.to_string(),
+        Value::DateTime(dt) => dt.to_string(),
+        Value::Duration(ms) => format!("PT{}S", *ms as f64 / 1000.0),
     }
 }
 

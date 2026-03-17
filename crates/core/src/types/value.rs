@@ -1,5 +1,7 @@
 use std::hash::{Hash, Hasher};
 
+use chrono;
+use chrono::Datelike;
 use serde::{Deserialize, Serialize};
 
 use super::data_type::DataType;
@@ -16,6 +18,9 @@ pub enum Value {
     Bytes(Vec<u8>),
     InternalId(InternalId),
     List(Vec<Value>),
+    Date(chrono::NaiveDate),
+    DateTime(chrono::NaiveDateTime),
+    Duration(i64), // milliseconds
 }
 
 // Manual Eq: treat f64 NaN == NaN for HashMap usage (PK index).
@@ -34,6 +39,9 @@ impl Hash for Value {
             Value::Bytes(b) => b.hash(state),
             Value::InternalId(id) => id.hash(state),
             Value::List(l) => l.hash(state),
+            Value::Date(d) => d.num_days_from_ce().hash(state),
+            Value::DateTime(dt) => dt.and_utc().timestamp_millis().hash(state),
+            Value::Duration(ms) => ms.hash(state),
         }
     }
 }
@@ -50,6 +58,9 @@ impl Value {
             Value::Bytes(_) => Some(DataType::String), // treated as opaque string-like
             Value::InternalId(_) => Some(DataType::InternalId),
             Value::List(_) => None, // lists don't map to a single DataType
+            Value::Date(_) => Some(DataType::Date),
+            Value::DateTime(_) => Some(DataType::DateTime),
+            Value::Duration(_) => Some(DataType::Duration),
         }
     }
 
@@ -91,6 +102,20 @@ impl Value {
             _ => None,
         }
     }
+
+    pub fn as_date(&self) -> Option<chrono::NaiveDate> {
+        match self {
+            Value::Date(d) => Some(*d),
+            _ => None,
+        }
+    }
+
+    pub fn as_datetime(&self) -> Option<chrono::NaiveDateTime> {
+        match self {
+            Value::DateTime(dt) => Some(*dt),
+            _ => None,
+        }
+    }
 }
 
 impl std::fmt::Display for Value {
@@ -112,6 +137,12 @@ impl std::fmt::Display for Value {
                     write!(f, "{item}")?;
                 }
                 write!(f, "]")
+            }
+            Value::Date(d) => write!(f, "{}", d.format("%Y-%m-%d")),
+            Value::DateTime(dt) => write!(f, "{}", dt.format("%Y-%m-%dT%H:%M:%S")),
+            Value::Duration(ms) => {
+                let total_secs = *ms as f64 / 1000.0;
+                write!(f, "PT{:.3}S", total_secs)
             }
         }
     }

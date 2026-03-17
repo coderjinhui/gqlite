@@ -477,3 +477,250 @@ fn var_length_exact() {
     };
     assert_eq!(r.var_length, Some((2, 2)));
 }
+
+// ── shortestPath parsing tests ──────────────────────────────
+
+#[test]
+fn shortest_path_basic() {
+    let stmt = parse(
+        "MATCH (a:Person), (b:Person), p = shortestPath((a)-[:KNOWS*..10]->(b)) RETURN p",
+    );
+    let Statement::Query(q) = stmt else { panic!() };
+    let Clause::Match(m) = &q.clauses[0] else {
+        panic!()
+    };
+    // Two regular path patterns (a:Person) and (b:Person)
+    assert_eq!(m.pattern.paths.len(), 2);
+    // One shortest-path pattern
+    assert_eq!(m.pattern.shortest_paths.len(), 1);
+    let sp = &m.pattern.shortest_paths[0];
+    assert_eq!(sp.path_variable, "p");
+    assert!(!sp.all_paths);
+    // Inner pattern: (a)-[:KNOWS*..10]->(b)
+    assert_eq!(sp.pattern.elements.len(), 3);
+    let PatternElement::Node(src) = &sp.pattern.elements[0] else {
+        panic!()
+    };
+    assert_eq!(src.alias.as_deref(), Some("a"));
+    let PatternElement::Rel(rel) = &sp.pattern.elements[1] else {
+        panic!()
+    };
+    assert_eq!(rel.label.as_deref(), Some("KNOWS"));
+    assert_eq!(rel.var_length, Some((1, 10)));
+    assert_eq!(rel.direction, Direction::Right);
+    let PatternElement::Node(dst) = &sp.pattern.elements[2] else {
+        panic!()
+    };
+    assert_eq!(dst.alias.as_deref(), Some("b"));
+}
+
+#[test]
+fn all_shortest_paths_parse() {
+    let stmt = parse(
+        "MATCH (a:Person), (b:Person), p = allShortestPaths((a)-[:KNOWS*..5]->(b)) RETURN p",
+    );
+    let Statement::Query(q) = stmt else { panic!() };
+    let Clause::Match(m) = &q.clauses[0] else {
+        panic!()
+    };
+    assert_eq!(m.pattern.shortest_paths.len(), 1);
+    let sp = &m.pattern.shortest_paths[0];
+    assert_eq!(sp.path_variable, "p");
+    assert!(sp.all_paths);
+}
+
+// ── EXISTS expression tests ─────────────────────────────────
+
+#[test]
+fn exists_subquery_parse() {
+    let stmt = parse(
+        "MATCH (p:Person) WHERE EXISTS { MATCH (p)-[:KNOWS]->(:Person) } RETURN p.name",
+    );
+    let Statement::Query(q) = stmt else { panic!() };
+    // Clause 0: MATCH, Clause 1: WHERE, Clause 2: RETURN
+    let Clause::Where(w) = &q.clauses[1] else {
+        panic!("expected WHERE clause");
+    };
+    match &w.expr {
+        Expr::Exists(inner) => {
+            // The inner query should have a MATCH clause
+            assert!(!inner.clauses.is_empty());
+            let Clause::Match(_) = &inner.clauses[0] else {
+                panic!("expected inner MATCH clause");
+            };
+        }
+        _ => panic!("expected Expr::Exists"),
+    }
+}
+
+#[test]
+fn not_exists_subquery_parse() {
+    let stmt = parse(
+        "MATCH (p:Person) WHERE NOT EXISTS { MATCH (p)-[:KNOWS]->(:Person) } RETURN p.name",
+    );
+    let Statement::Query(q) = stmt else { panic!() };
+    let Clause::Where(w) = &q.clauses[1] else {
+        panic!("expected WHERE clause");
+    };
+    // NOT EXISTS is parsed as UnaryOp(Not, Exists(...))
+    match &w.expr {
+        Expr::UnaryOp {
+            op: UnaryOp::Not,
+            expr: inner,
+        } => match inner.as_ref() {
+            Expr::Exists(query) => {
+                assert!(!query.clauses.is_empty());
+            }
+            _ => panic!("expected Expr::Exists inside NOT"),
+        },
+        _ => panic!("expected UnaryOp(Not, Exists(...))"),
+    }
+}
+
+// ── CALL procedure parsing ─────────────────────────────────
+
+#[test]
+fn call_simple_procedure() {
+    let stmt = parse("CALL dbms.tables()");
+    let Statement::Call { procedure, args, yields } = stmt else {
+        panic!("expected Call statement");
+    };
+    assert_eq!(procedure, "dbms.tables");
+    assert!(args.is_empty());
+    assert!(yields.is_empty());
+}
+
+#[test]
+fn call_with_yield() {
+    let stmt = parse("CALL dbms.tables() YIELD name, type");
+    let Statement::Call { procedure, args, yields } = stmt else {
+        panic!("expected Call statement");
+    };
+    assert_eq!(procedure, "dbms.tables");
+    assert!(args.is_empty());
+    assert_eq!(yields, vec!["name", "type"]);
+}
+
+#[test]
+fn call_with_args() {
+    let stmt = parse("CALL algo.pagerank('Person', 20)");
+    let Statement::Call { procedure, args, yields } = stmt else {
+        panic!("expected Call statement");
+    };
+    assert_eq!(procedure, "algo.pagerank");
+    assert_eq!(args.len(), 2);
+    assert!(matches!(&args[0], Expr::StringLit(s) if s == "Person"));
+    assert!(matches!(&args[1], Expr::IntLit(20)));
+    assert!(yields.is_empty());
+}
+
+#[test]
+fn call_case_insensitive() {
+    let stmt = parse("call dbms.tables() yield name");
+    let Statement::Call { procedure, yields, .. } = stmt else {
+        panic!("expected Call statement");
+    };
+    assert_eq!(procedure, "dbms.tables");
+    assert_eq!(yields, vec!["name"]);
+}
+
+#[test]
+fn call_dotted_name_three_parts() {
+    let stmt = parse("CALL a.b.c()");
+    let Statement::Call { procedure, .. } = stmt else {
+        panic!("expected Call statement");
+    };
+    assert_eq!(procedure, "a.b.c");
+}
+
+#[test]
+fn call_subquery_basic() {
+    let stmt = parse("CALL { MATCH (n:Person) RETURN n.name AS name } RETURN name");
+    let Statement::Query(q) = stmt else {
+        panic!("expected query");
+    };
+    assert_eq!(q.clauses.len(), 2); // CallSubquery + Return
+    let Clause::CallSubquery(sub) = &q.clauses[0] else {
+        panic!("expected CallSubquery clause");
+    };
+    assert_eq!(sub.clauses.len(), 2); // Match + Return
+    assert!(matches!(&sub.clauses[0], Clause::Match(_)));
+    assert!(matches!(&sub.clauses[1], Clause::Return(_)));
+    assert!(matches!(&q.clauses[1], Clause::Return(_)));
+}
+
+#[test]
+fn call_subquery_with_preceding_match() {
+    let stmt = parse("MATCH (a:Person) CALL { MATCH (b:Person) RETURN count(b) AS total } RETURN a.name, total");
+    let Statement::Query(q) = stmt else {
+        panic!("expected query");
+    };
+    assert_eq!(q.clauses.len(), 3); // Match + CallSubquery + Return
+    assert!(matches!(&q.clauses[0], Clause::Match(_)));
+    let Clause::CallSubquery(sub) = &q.clauses[1] else {
+        panic!("expected CallSubquery clause");
+    };
+    assert_eq!(sub.clauses.len(), 2); // Match + Return
+    assert!(matches!(&q.clauses[2], Clause::Return(_)));
+}
+
+#[test]
+fn call_subquery_empty_body_errors() {
+    let err = parse_err("CALL { } RETURN 1");
+    assert!(err.contains("expected clauses inside CALL { ... }"));
+}
+
+// ── parse_all (multi-statement) tests ────────────────────────
+
+#[test]
+fn parse_all_single_statement() {
+    let stmts = Parser::parse_all("MATCH (n) RETURN n;").unwrap();
+    assert_eq!(stmts.len(), 1);
+}
+
+#[test]
+fn parse_all_multiple_statements() {
+    let stmts = Parser::parse_all(
+        "CREATE NODE TABLE A(id INT64, PRIMARY KEY(id)); \
+         CREATE NODE TABLE B(id INT64, PRIMARY KEY(id));"
+    ).unwrap();
+    assert_eq!(stmts.len(), 2);
+}
+
+#[test]
+fn parse_all_mixed_ddl_and_dml() {
+    let stmts = Parser::parse_all(
+        "CREATE NODE TABLE N(id INT64, PRIMARY KEY(id)); \
+         CREATE (n:N {id: 1}); \
+         MATCH (n:N) RETURN n.id;"
+    ).unwrap();
+    assert_eq!(stmts.len(), 3);
+}
+
+#[test]
+fn parse_all_no_trailing_semicolon() {
+    let stmts = Parser::parse_all(
+        "CREATE NODE TABLE A(id INT64, PRIMARY KEY(id)); \
+         MATCH (n) RETURN n"
+    ).unwrap();
+    assert_eq!(stmts.len(), 2);
+}
+
+#[test]
+fn parse_all_extra_semicolons() {
+    let stmts = Parser::parse_all(";;; MATCH (n) RETURN n ;;; MATCH (m) RETURN m ;;;").unwrap();
+    assert_eq!(stmts.len(), 2);
+}
+
+#[test]
+fn parse_all_empty_input() {
+    let stmts = Parser::parse_all("").unwrap();
+    assert_eq!(stmts.len(), 0);
+}
+
+#[test]
+fn parse_all_only_semicolons() {
+    let stmts = Parser::parse_all(";;;").unwrap();
+    assert_eq!(stmts.len(), 0);
+}
+

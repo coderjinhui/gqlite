@@ -73,6 +73,20 @@ pub enum LogicalOperator {
         max_hops: u32,
     },
 
+    /// Shortest-path BFS: `p = shortestPath((a)-[:R*..N]->(b))`.
+    ShortestPath {
+        input: Box<LogicalOperator>,
+        rel_table_name: String,
+        rel_table_id: u32,
+        direction: Direction,
+        src_alias: String,
+        dst_alias: String,
+        path_alias: String,
+        dst_table_id: Option<u32>,
+        max_hops: u32,
+        all_paths: bool,
+    },
+
     /// Insert a new node.
     InsertNode {
         table_name: String,
@@ -197,6 +211,12 @@ pub enum LogicalOperator {
         file_path: String,
         header: bool,
         delimiter: char,
+    },
+
+    /// Execute a subquery and concatenate/cross-join results with input.
+    CallSubquery {
+        input: Box<LogicalOperator>,
+        subquery: QueryStatement,
     },
 }
 
@@ -600,6 +620,24 @@ impl<'a> Planner<'a> {
                         }
                     }
                 }
+                BoundClause::CallSubquery(sub) => {
+                    // Apply pending filter before subquery
+                    if let Some(predicate) = pending_filter.take() {
+                        if let Some(input) = current_plan.take() {
+                            current_plan = Some(LogicalOperator::Filter {
+                                input: Box::new(input),
+                                predicate,
+                            });
+                        }
+                    }
+                    let input = current_plan
+                        .take()
+                        .unwrap_or(LogicalOperator::EmptyResult);
+                    current_plan = Some(LogicalOperator::CallSubquery {
+                        input: Box::new(input),
+                        subquery: sub.clone(),
+                    });
+                }
             }
         }
 
@@ -678,6 +716,13 @@ impl<'a> Planner<'a> {
                 } else {
                     plan
                 });
+            }
+        }
+
+        // Plan shortest-path patterns on top of the existing scan/expand plan.
+        for sp in &pattern.shortest_paths {
+            if let Some(input) = result.take() {
+                result = Some(self.plan_shortest_path(input, sp)?);
             }
         }
 
@@ -910,13 +955,26 @@ impl<'a> Planner<'a> {
                             let (src_alias, dst_alias) =
                                 self.extract_rel_endpoints(path, r);
 
+                            // Resolve rel properties: map property names to column indices
+                            let properties: Vec<(usize, Expr)> = r
+                                .properties
+                                .iter()
+                                .filter_map(|(name, expr)| {
+                                    entry
+                                        .columns
+                                        .iter()
+                                        .position(|c| c.name == *name)
+                                        .map(|idx| (idx, expr.clone()))
+                                })
+                                .collect();
+
                             return Ok(LogicalOperator::InsertRel {
                                 input: Box::new(input.unwrap()),
                                 rel_table_name: label.clone(),
                                 rel_table_id: entry.table_id,
                                 src_alias,
                                 dst_alias,
-                                properties: vec![],
+                                properties,
                             });
                         }
                     }
@@ -1003,6 +1061,100 @@ impl<'a> Planner<'a> {
         }
         (src, dst)
     }
+
+    /// Plan a `shortestPath(...)` / `allShortestPaths(...)` pattern.
+    fn plan_shortest_path(
+        &self,
+        input: LogicalOperator,
+        sp: &ShortestPathPattern,
+    ) -> Result<LogicalOperator, GqliteError> {
+        // Extract source alias (first node) and destination alias (last node)
+        let src_alias = sp
+            .pattern
+            .elements
+            .first()
+            .and_then(|e| {
+                if let PatternElement::Node(n) = e {
+                    n.alias.clone()
+                } else {
+                    None
+                }
+            })
+            .unwrap_or_default();
+
+        let dst_alias = sp
+            .pattern
+            .elements
+            .last()
+            .and_then(|e| {
+                if let PatternElement::Node(n) = e {
+                    n.alias.clone()
+                } else {
+                    None
+                }
+            })
+            .unwrap_or_default();
+
+        // Extract rel info from the pattern (the first Rel element)
+        let rel = sp.pattern.elements.iter().find_map(|e| {
+            if let PatternElement::Rel(r) = e {
+                Some(r)
+            } else {
+                None
+            }
+        });
+
+        let rel = rel.ok_or_else(|| {
+            GqliteError::Other(
+                "shortestPath requires a relationship pattern".into(),
+            )
+        })?;
+
+        let (rel_table_name, rel_table_id) = if let Some(ref label) = rel.label {
+            let entry = self.catalog.get_rel_table(label).ok_or_else(|| {
+                GqliteError::Other(format!("rel table '{}' not found", label))
+            })?;
+            (label.clone(), entry.table_id)
+        } else {
+            return Err(GqliteError::Other(
+                "shortestPath requires a typed relationship".into(),
+            ));
+        };
+
+        // Resolve destination table id from the last node's label
+        let dst_table_id = sp
+            .pattern
+            .elements
+            .last()
+            .and_then(|e| {
+                if let PatternElement::Node(n) = e {
+                    n.label
+                        .as_ref()
+                        .and_then(|l| self.catalog.get_node_table(l))
+                        .map(|entry| entry.table_id)
+                } else {
+                    None
+                }
+            });
+
+        let max_hops = rel
+            .var_length
+            .map(|(_, max)| max)
+            .unwrap_or(u32::MAX);
+
+        Ok(LogicalOperator::ShortestPath {
+            input: Box::new(input),
+            rel_table_name,
+            rel_table_id,
+            direction: rel.direction,
+            src_alias,
+            dst_alias,
+            path_alias: sp.path_variable.clone(),
+            dst_table_id,
+            max_hops,
+            all_paths: sp.all_paths,
+        })
+    }
 }
 
 /// Check if an expression contains an aggregate function call.
@@ -1023,6 +1175,45 @@ fn contains_aggregate(expr: &Expr) -> bool {
         }
         Expr::UnaryOp { expr, .. } => contains_aggregate(expr),
         Expr::IsNull { expr, .. } => contains_aggregate(expr),
+        Expr::Cast { expr, .. } => contains_aggregate(expr),
+        Expr::Case { operand, when_clauses, else_result } => {
+            if let Some(op) = operand {
+                if contains_aggregate(op) {
+                    return true;
+                }
+            }
+            for (cond, result) in when_clauses {
+                if contains_aggregate(cond) || contains_aggregate(result) {
+                    return true;
+                }
+            }
+            if let Some(el) = else_result {
+                if contains_aggregate(el) {
+                    return true;
+                }
+            }
+            false
+        }
+        Expr::In { expr, list, .. } => {
+            contains_aggregate(expr) || contains_aggregate(list)
+        }
+        Expr::Exists(_) => false,
+        Expr::ListComprehension { list, filter, map_expr, .. } => {
+            if contains_aggregate(list) {
+                return true;
+            }
+            if let Some(f) = filter {
+                if contains_aggregate(f) {
+                    return true;
+                }
+            }
+            if let Some(m) = map_expr {
+                if contains_aggregate(m) {
+                    return true;
+                }
+            }
+            false
+        }
         _ => false,
     }
 }

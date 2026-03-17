@@ -119,6 +119,10 @@ impl Engine {
                 self.exec_unwind(input_result, expr, alias)
             }
 
+            PhysicalPlan::CallSubquery { input, subquery } => {
+                self.exec_call_subquery(input, subquery, db, txn_id)
+            }
+
             PhysicalPlan::CsrExpand {
                 input,
                 rel_table_name,

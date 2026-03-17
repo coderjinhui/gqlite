@@ -140,6 +140,10 @@ fn push_filters_down(plan: LogicalOperator) -> LogicalOperator {
             detach,
             variables,
         },
+        LogicalOperator::CallSubquery { input, subquery } => LogicalOperator::CallSubquery {
+            input: Box::new(push_filters_down(*input)),
+            subquery,
+        },
         // Leaf / DDL nodes — nothing to optimize.
         other => other,
     }
@@ -344,7 +348,8 @@ fn collect_aliases_recursive(plan: &LogicalOperator, aliases: &mut Vec<String>) 
         | LogicalOperator::Aggregate { input, .. }
         | LogicalOperator::SetProperty { input, .. }
         | LogicalOperator::InsertRel { input, .. }
-        | LogicalOperator::Delete { input, .. } => {
+        | LogicalOperator::Delete { input, .. }
+        | LogicalOperator::CallSubquery { input, .. } => {
             collect_aliases_recursive(input, aliases);
         }
         LogicalOperator::HashJoin { build, probe, .. } => {
@@ -394,6 +399,37 @@ fn collect_expr_aliases(expr: &Expr, aliases: &mut Vec<String>) {
         Expr::ListLit(items) => {
             for item in items {
                 collect_expr_aliases(item, aliases);
+            }
+        }
+        Expr::Cast { expr, .. } => {
+            collect_expr_aliases(expr, aliases);
+        }
+        Expr::Case { operand, when_clauses, else_result } => {
+            if let Some(op) = operand {
+                collect_expr_aliases(op, aliases);
+            }
+            for (cond, result) in when_clauses {
+                collect_expr_aliases(cond, aliases);
+                collect_expr_aliases(result, aliases);
+            }
+            if let Some(el) = else_result {
+                collect_expr_aliases(el, aliases);
+            }
+        }
+        Expr::In { expr, list, .. } => {
+            collect_expr_aliases(expr, aliases);
+            collect_expr_aliases(list, aliases);
+        }
+        Expr::Exists(_) => {
+            // EXISTS subquery has its own scope; don't collect inner aliases.
+        }
+        Expr::ListComprehension { list, filter, map_expr, .. } => {
+            collect_expr_aliases(list, aliases);
+            if let Some(f) = filter {
+                collect_expr_aliases(f, aliases);
+            }
+            if let Some(m) = map_expr {
+                collect_expr_aliases(m, aliases);
             }
         }
         _ => {}
@@ -481,6 +517,10 @@ fn collect_required_recursive(plan: &LogicalOperator, cols: &mut Vec<ColumnRef>)
         | LogicalOperator::InsertRel { input, .. } => {
             collect_required_recursive(input, cols);
         }
+        LogicalOperator::CallSubquery { input, .. } => {
+            // Subquery has its own scope; only collect from input.
+            collect_required_recursive(input, cols);
+        }
         _ => {}
     }
 }
@@ -510,6 +550,37 @@ fn collect_expr_columns(expr: &Expr, cols: &mut Vec<ColumnRef>) {
         Expr::ListLit(items) => {
             for item in items {
                 collect_expr_columns(item, cols);
+            }
+        }
+        Expr::Cast { expr, .. } => {
+            collect_expr_columns(expr, cols);
+        }
+        Expr::Case { operand, when_clauses, else_result } => {
+            if let Some(op) = operand {
+                collect_expr_columns(op, cols);
+            }
+            for (cond, result) in when_clauses {
+                collect_expr_columns(cond, cols);
+                collect_expr_columns(result, cols);
+            }
+            if let Some(el) = else_result {
+                collect_expr_columns(el, cols);
+            }
+        }
+        Expr::In { expr, list, .. } => {
+            collect_expr_columns(expr, cols);
+            collect_expr_columns(list, cols);
+        }
+        Expr::Exists(_) => {
+            // EXISTS subquery has its own scope; don't collect inner columns.
+        }
+        Expr::ListComprehension { list, filter, map_expr, .. } => {
+            collect_expr_columns(list, cols);
+            if let Some(f) = filter {
+                collect_expr_columns(f, cols);
+            }
+            if let Some(m) = map_expr {
+                collect_expr_columns(m, cols);
             }
         }
         _ => {}
@@ -654,6 +725,10 @@ fn apply_projection_pushdown(
         } => LogicalOperator::Aggregate {
             input: Box::new(apply_projection_pushdown(*input, required)),
             expressions,
+        },
+        LogicalOperator::CallSubquery { input, subquery } => LogicalOperator::CallSubquery {
+            input: Box::new(apply_projection_pushdown(*input, required)),
+            subquery,
         },
         other => other,
     }

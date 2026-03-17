@@ -17,3 +17,5 @@ ahash = { workspace = true }
 parking_lot = { workspace = true }
 crc32fast = { workspace = true }
 rayon = { workspace = true }
+regex = { workspace = true }
+chrono = { workspace = true }

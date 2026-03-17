@@ -96,6 +96,13 @@ impl<'a> Binder<'a> {
                     all: *all,
                 })
             }
+            Statement::Call { .. } => {
+                // CALL statements are handled directly in Connection::execute_with_params,
+                // they should never reach the binder.
+                Err(GqliteError::Parse(
+                    "CALL statements should be handled before binding".into(),
+                ))
+            }
         }
     }
 
@@ -192,6 +199,35 @@ impl<'a> Binder<'a> {
                         on_match: m.on_match.clone(),
                     }));
                 }
+                Clause::CallSubquery(sub_query) => {
+                    // The inner subquery has its own scope; pass through for
+                    // binding at execution time (like EXISTS).
+                    // But we need to register output columns in the outer scope
+                    // so that subsequent clauses can reference them.
+                    for clause in &sub_query.clauses {
+                        if let Clause::Return(ret) = clause {
+                            for item in &ret.items {
+                                // Use alias if present, otherwise derive from expr
+                                let col_name = if let Some(ref alias) = item.alias {
+                                    alias.clone()
+                                } else {
+                                    match &item.expr {
+                                        Expr::Ident(name) => name.clone(),
+                                        Expr::Property(_, field) => field.clone(),
+                                        Expr::FunctionCall { name, .. } => name.clone(),
+                                        _ => continue,
+                                    }
+                                };
+                                self.scope.define(BoundVariable {
+                                    name: col_name,
+                                    table_id: None,
+                                    var_type: BoundVarType::Node { label: None },
+                                });
+                            }
+                        }
+                    }
+                    bound_clauses.push(BoundClause::CallSubquery(sub_query.clone()));
+                }
             }
         }
 
@@ -256,6 +292,59 @@ impl<'a> Binder<'a> {
                 }
             }
         }
+
+        // Bind shortest-path patterns: validate inner elements and register path variable
+        for sp in &pattern.shortest_paths {
+            for elem in &sp.pattern.elements {
+                match elem {
+                    PatternElement::Node(n) => {
+                        if let Some(ref label) = n.label {
+                            if self.catalog.get_node_table(label).is_none() {
+                                return Err(GqliteError::Parse(format!(
+                                    "node table '{}' not found",
+                                    label
+                                )));
+                            }
+                        }
+                        if let Some(ref alias) = n.alias {
+                            let table_id = n
+                                .label
+                                .as_ref()
+                                .and_then(|l| self.catalog.get_node_table(l))
+                                .map(|t| t.table_id);
+                            // Only define if not already in scope (node may be
+                            // defined in a preceding regular path pattern).
+                            if !self.scope.has(alias) {
+                                self.scope.define(BoundVariable {
+                                    name: alias.clone(),
+                                    table_id,
+                                    var_type: BoundVarType::Node {
+                                        label: n.label.clone(),
+                                    },
+                                });
+                            }
+                        }
+                    }
+                    PatternElement::Rel(r) => {
+                        if let Some(ref label) = r.label {
+                            if self.catalog.get_rel_table(label).is_none() {
+                                return Err(GqliteError::Parse(format!(
+                                    "relationship table '{}' not found",
+                                    label
+                                )));
+                            }
+                        }
+                    }
+                }
+            }
+            // Register the path variable (the `p` in `p = shortestPath(...)`)
+            self.scope.define(BoundVariable {
+                name: sp.path_variable.clone(),
+                table_id: None,
+                var_type: BoundVarType::Node { label: None }, // path variable, generic
+            });
+        }
+
         Ok(())
     }
 
@@ -319,6 +408,39 @@ impl<'a> Binder<'a> {
                 Ok(())
             }
             Expr::Cast { expr, .. } => self.validate_expr(expr),
+            Expr::Case { operand, when_clauses, else_result } => {
+                if let Some(op) = operand {
+                    self.validate_expr(op)?;
+                }
+                for (cond, result) in when_clauses {
+                    self.validate_expr(cond)?;
+                    self.validate_expr(result)?;
+                }
+                if let Some(el) = else_result {
+                    self.validate_expr(el)?;
+                }
+                Ok(())
+            }
+            Expr::In { expr, list, .. } => {
+                self.validate_expr(expr)?;
+                self.validate_expr(list)
+            }
+            Expr::Exists(_) => {
+                // The inner query is validated when it gets bound during execution.
+                // At bind time we just accept it — the inner scope is separate.
+                Ok(())
+            }
+            Expr::ListComprehension { list, filter, map_expr, .. } => {
+                // Validate the list expression (it may reference bound variables).
+                // The comprehension variable is local; filter/map_expr may reference it,
+                // so we skip deep validation of those sub-expressions at bind time.
+                self.validate_expr(list)?;
+                // filter and map_expr may reference the comprehension variable which
+                // is not in scope at bind time, so we don't validate them here.
+                let _ = filter;
+                let _ = map_expr;
+                Ok(())
+            }
         }
     }
 
@@ -441,6 +563,7 @@ pub enum BoundClause {
     Skip(Expr),
     Unwind { expr: Expr, alias: String },
     Merge(BoundMerge),
+    CallSubquery(QueryStatement),
 }
 
 #[derive(Debug, Clone)]

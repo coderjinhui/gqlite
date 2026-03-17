@@ -10,6 +10,7 @@ pub mod executor;
 pub mod functions;
 pub mod parser;
 pub mod planner;
+pub mod procedure;
 pub mod storage;
 pub mod transaction;
 pub mod types;
@@ -320,6 +321,14 @@ impl Database {
         conn.execute(gql)
     }
 
+    /// Execute a script containing multiple semicolon-separated GQL statements.
+    /// Returns the result of the last statement, or an empty result if no statements.
+    /// Stops on the first error.
+    pub fn execute_script(&self, script: &str) -> Result<QueryResult, GqliteError> {
+        let conn = self.connect();
+        conn.execute_script(script)
+    }
+
     /// Convenience: execute a read-only query.
     pub fn query(&self, gql: &str) -> Result<QueryResult, GqliteError> {
         self.execute(gql)
@@ -436,14 +445,40 @@ impl Connection {
         self.execute_with_params(gql, HashMap::new())
     }
 
+    /// Execute a script containing multiple semicolon-separated GQL statements.
+    /// Returns the result of the last statement, or an empty result if no statements.
+    /// Stops on the first error.
+    pub fn execute_script(&self, script: &str) -> Result<QueryResult, GqliteError> {
+        let stmts = Parser::parse_all(script)?;
+        let mut last_result = QueryResult::empty();
+        for stmt in &stmts {
+            last_result = self.execute_statement(stmt, HashMap::new())?;
+        }
+        Ok(last_result)
+    }
+
     /// Execute a GQL statement with parameter bindings.
     pub fn execute_with_params(
         &self,
         gql: &str,
         params: HashMap<String, Value>,
     ) -> Result<QueryResult, GqliteError> {
-        // 1. Parse
         let stmt = Parser::parse_query(gql)?;
+        self.execute_statement(&stmt, params)
+    }
+
+    /// Execute a pre-parsed statement with parameter bindings.
+    fn execute_statement(
+        &self,
+        stmt: &crate::parser::ast::Statement,
+        params: HashMap<String, Value>,
+    ) -> Result<QueryResult, GqliteError> {
+        use crate::parser::ast::Statement as AstStatement;
+
+        // Handle CALL procedure directly (bypasses binder/planner)
+        if let AstStatement::Call { procedure, args, yields } = &stmt {
+            return self.execute_call(procedure, args, yields, &params);
+        }
 
         // 2. Bind
         let catalog = self.db.catalog.read().unwrap();
@@ -469,7 +504,8 @@ impl Connection {
         // 5. Auto-transaction + Execute
         if physical.is_read_only() {
             let mut txn = self.db.txn_manager.begin_read_only();
-            let engine = Engine::with_snapshot(txn.start_ts, params);
+            let mut engine = Engine::with_snapshot(txn.start_ts, params);
+            engine.set_db(self.db.clone());
             let result = engine.execute_plan_parallel(&physical, &self.db, txn.id);
             match &result {
                 Ok(_) => self.db.txn_manager.commit(&mut txn),
@@ -479,7 +515,8 @@ impl Connection {
         } else {
             let (mut txn, _write_guard) = self.db.txn_manager.begin_read_write()?;
             let txn_id = txn.id;
-            let engine = Engine::with_snapshot(txn.start_ts, params);
+            let mut engine = Engine::with_snapshot(txn.start_ts, params);
+            engine.set_db(self.db.clone());
             let result = engine.execute_plan(&physical, &self.db, txn_id);
             let mut should_checkpoint = false;
             match &result {
@@ -530,6 +567,115 @@ impl Connection {
     pub fn query(&self, gql: &str) -> Result<QueryResult, GqliteError> {
         self.execute(gql)
     }
+
+    /// Execute a CALL procedure statement directly.
+    fn execute_call(
+        &self,
+        procedure_name: &str,
+        arg_exprs: &[crate::parser::ast::Expr],
+        yields: &[String],
+        params: &HashMap<String, Value>,
+    ) -> Result<QueryResult, GqliteError> {
+        // Resolve the procedure from the registry
+        let registry = procedure::registry::ProcedureRegistry::new();
+        let proc = registry
+            .get(procedure_name)
+            .ok_or_else(|| {
+                GqliteError::Execution(format!(
+                    "unknown procedure '{}'",
+                    procedure_name
+                ))
+            })?;
+
+        // Evaluate argument expressions to values
+        let args: Vec<Value> = arg_exprs
+            .iter()
+            .map(|expr| self.eval_call_arg(expr, params))
+            .collect::<Result<Vec<_>, _>>()?;
+
+        // Execute the procedure
+        let all_columns = proc.output_columns();
+        let all_rows = proc.execute(&args, &self.db)?;
+
+        // Filter columns by YIELD list (if specified)
+        if yields.is_empty() {
+            // Return all columns
+            let columns: Vec<ColumnInfo> = all_columns
+                .iter()
+                .map(|name| ColumnInfo {
+                    name: name.clone(),
+                    data_type: DataType::String,
+                })
+                .collect();
+            let rows: Vec<Row> = all_rows
+                .into_iter()
+                .map(|r| Row { values: r })
+                .collect();
+            Ok(QueryResult::new(columns, rows))
+        } else {
+            // Map YIELD column names to indices in the procedure output
+            let yield_indices: Vec<usize> = yields
+                .iter()
+                .map(|y| {
+                    all_columns
+                        .iter()
+                        .position(|c| c == y)
+                        .ok_or_else(|| {
+                            GqliteError::Execution(format!(
+                                "procedure '{}' does not output column '{}'",
+                                procedure_name, y
+                            ))
+                        })
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+
+            let columns: Vec<ColumnInfo> = yields
+                .iter()
+                .map(|name| ColumnInfo {
+                    name: name.clone(),
+                    data_type: DataType::String,
+                })
+                .collect();
+
+            let rows: Vec<Row> = all_rows
+                .into_iter()
+                .map(|row| {
+                    let values: Vec<Value> = yield_indices
+                        .iter()
+                        .map(|&idx| row[idx].clone())
+                        .collect();
+                    Row { values }
+                })
+                .collect();
+
+            Ok(QueryResult::new(columns, rows))
+        }
+    }
+
+    /// Evaluate a simple expression for CALL arguments.
+    /// Supports literals and parameter references.
+    fn eval_call_arg(
+        &self,
+        expr: &crate::parser::ast::Expr,
+        params: &HashMap<String, Value>,
+    ) -> Result<Value, GqliteError> {
+        use crate::parser::ast::Expr;
+        match expr {
+            Expr::IntLit(v) => Ok(Value::Int(*v)),
+            Expr::FloatLit(v) => Ok(Value::Float(*v)),
+            Expr::StringLit(s) => Ok(Value::String(s.clone())),
+            Expr::BoolLit(b) => Ok(Value::Bool(*b)),
+            Expr::NullLit => Ok(Value::Null),
+            Expr::Param(name) => {
+                params.get(name).cloned().ok_or_else(|| {
+                    GqliteError::Execution(format!("parameter '{}' not found", name))
+                })
+            }
+            _ => Err(GqliteError::Execution(
+                "unsupported expression in CALL arguments".into(),
+            )),
+        }
+    }
 }
 
 // ── PreparedStatement ────────────────────────────────────────────
@@ -550,7 +696,8 @@ impl PreparedStatement {
 
         if self.plan.is_read_only() {
             let mut txn = txn_manager.begin_read_only();
-            let engine = Engine::with_snapshot(txn.start_ts, params);
+            let mut engine = Engine::with_snapshot(txn.start_ts, params);
+            engine.set_db(self.db.clone());
             let result = engine.execute_plan_parallel(&self.plan, &self.db, txn.id);
             match &result {
                 Ok(_) => txn_manager.commit(&mut txn),
@@ -560,7 +707,8 @@ impl PreparedStatement {
         } else {
             let (mut txn, _write_guard) = txn_manager.begin_read_write()?;
             let txn_id = txn.id;
-            let engine = Engine::with_snapshot(txn.start_ts, params);
+            let mut engine = Engine::with_snapshot(txn.start_ts, params);
+            engine.set_db(self.db.clone());
             let result = engine.execute_plan(&self.plan, &self.db, txn_id);
             let mut should_checkpoint = false;
             match &result {

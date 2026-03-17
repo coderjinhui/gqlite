@@ -23,6 +23,23 @@ impl Parser {
         parser.parse()
     }
 
+    /// Parse a raw query string that may contain multiple semicolon-separated
+    /// statements. Returns all parsed statements in order.
+    pub fn parse_all(input: &str) -> Result<Vec<Statement>, ParseError> {
+        let tokens = super::token::tokenize(input)
+            .map_err(|e| ParseError::Lex(e))?;
+        let mut parser = Parser::new(tokens);
+        let mut stmts = Vec::new();
+        // Skip leading semicolons
+        while parser.check(&Token::Semicolon) {
+            parser.advance();
+        }
+        while parser.peek() != &Token::Eof {
+            stmts.push(parser.parse()?);
+        }
+        Ok(stmts)
+    }
+
     /// Parse the token stream into a Statement.
     pub fn parse(&mut self) -> Result<Statement, ParseError> {
         // Skip leading semicolons
@@ -31,6 +48,15 @@ impl Parser {
         }
 
         let stmt = match self.peek() {
+            Token::Call => {
+                // CALL { subquery } → parse as query clause
+                // CALL procedure_name(...) → parse as procedure call
+                if self.peek_at(1) == &Token::LBrace {
+                    self.parse_query_statement()
+                } else {
+                    self.parse_call_statement()
+                }
+            }
             Token::Create => {
                 // Peek ahead: CREATE NODE TABLE / CREATE REL TABLE / CREATE (pattern)
                 if self.peek_at(1) == &Token::Node && self.peek_at(2) == &Token::Table {
@@ -74,6 +100,81 @@ impl Parser {
         })
     }
 
+    // ── CALL Statement ─────────────────────────────────────────
+
+    fn parse_call_statement(&mut self) -> Result<Statement, ParseError> {
+        self.expect(&Token::Call)?;
+        // Procedure name (may have dots: dbms.tables)
+        let mut name = self.expect_ident()?;
+        while self.check(&Token::Dot) {
+            self.advance();
+            let part = self.expect_ident()?;
+            name = format!("{}.{}", name, part);
+        }
+        // Arguments
+        self.expect(&Token::LParen)?;
+        let mut args = Vec::new();
+        if !self.check(&Token::RParen) {
+            args.push(self.parse_expr()?);
+            while self.check(&Token::Comma) {
+                self.advance();
+                args.push(self.parse_expr()?);
+            }
+        }
+        self.expect(&Token::RParen)?;
+        // YIELD clause (optional)
+        let mut yields = Vec::new();
+        if self.check(&Token::Yield) {
+            self.advance();
+            yields.push(self.expect_ident()?);
+            while self.check(&Token::Comma) {
+                self.advance();
+                yields.push(self.expect_ident()?);
+            }
+        }
+        Ok(Statement::Call { procedure: name, args, yields })
+    }
+
+    /// Parse `CALL { <inner clauses> }` as a Clause.
+    fn parse_call_subquery_clause(&mut self) -> Result<Clause, ParseError> {
+        self.expect(&Token::Call)?;
+        self.expect(&Token::LBrace)?;
+
+        let mut inner_clauses = Vec::new();
+        loop {
+            match self.peek() {
+                Token::Match | Token::Optional => inner_clauses.push(self.parse_match_clause()?),
+                Token::Where => inner_clauses.push(self.parse_where_clause()?),
+                Token::Return => inner_clauses.push(self.parse_return_clause()?),
+                Token::With => inner_clauses.push(self.parse_with_clause()?),
+                Token::Order => inner_clauses.push(self.parse_order_by_clause()?),
+                Token::Limit => inner_clauses.push(self.parse_limit_clause()?),
+                Token::Skip => inner_clauses.push(self.parse_skip_clause()?),
+                Token::Create => inner_clauses.push(self.parse_create_clause()?),
+                Token::Set => inner_clauses.push(self.parse_set_clause()?),
+                Token::Delete | Token::Detach => inner_clauses.push(self.parse_delete_clause()?),
+                Token::Unwind => inner_clauses.push(self.parse_unwind_clause()?),
+                Token::Merge => inner_clauses.push(self.parse_merge_clause()?),
+                Token::Call => {
+                    if self.peek_at(1) == &Token::LBrace {
+                        inner_clauses.push(self.parse_call_subquery_clause()?);
+                    } else {
+                        break;
+                    }
+                }
+                _ => break,
+            }
+        }
+
+        self.expect(&Token::RBrace)?;
+
+        if inner_clauses.is_empty() {
+            return Err(self.error("expected clauses inside CALL { ... }"));
+        }
+
+        Ok(Clause::CallSubquery(QueryStatement { clauses: inner_clauses }))
+    }
+
     // ── Query Statement ─────────────────────────────────────────
 
     fn parse_query_statement(&mut self) -> Result<Statement, ParseError> {
@@ -93,6 +194,14 @@ impl Parser {
                 Token::Delete | Token::Detach => clauses.push(self.parse_delete_clause()?),
                 Token::Unwind => clauses.push(self.parse_unwind_clause()?),
                 Token::Merge => clauses.push(self.parse_merge_clause()?),
+                Token::Call => {
+                    // CALL { subquery } inside a query
+                    if self.peek_at(1) == &Token::LBrace {
+                        clauses.push(self.parse_call_subquery_clause()?);
+                    } else {
+                        break; // Let top-level handle CALL procedure
+                    }
+                }
                 _ => break,
             }
         }
@@ -118,12 +227,60 @@ impl Parser {
     }
 
     fn parse_graph_pattern(&mut self) -> Result<GraphPattern, ParseError> {
-        let mut paths = vec![self.parse_path_pattern()?];
+        let mut paths = Vec::new();
+        let mut shortest_paths = Vec::new();
+
+        // Parse first element (path or shortest-path assignment)
+        self.parse_graph_pattern_element(&mut paths, &mut shortest_paths)?;
+
         while self.check(&Token::Comma) {
             self.advance();
-            paths.push(self.parse_path_pattern()?);
+            self.parse_graph_pattern_element(&mut paths, &mut shortest_paths)?;
         }
-        Ok(GraphPattern { paths })
+
+        Ok(GraphPattern { paths, shortest_paths })
+    }
+
+    /// Parse a single element in a comma-separated graph pattern.
+    /// It can be a regular path pattern `(a)-[:R]->(b)`, or a shortest-path
+    /// assignment `p = shortestPath((a)-[:R*..N]->(b))`.
+    fn parse_graph_pattern_element(
+        &mut self,
+        paths: &mut Vec<PathPattern>,
+        shortest_paths: &mut Vec<ShortestPathPattern>,
+    ) -> Result<(), ParseError> {
+        // Check for `ident = shortestPath(...)` or `ident = allShortestPaths(...)`
+        if let Token::Ident(_) = self.peek() {
+            if self.peek_at(1) == &Token::Eq {
+                // Look ahead: is the token after `=` an ident that matches shortestPath/allShortestPaths?
+                if let Token::Ident(func_name) = self.peek_at(2) {
+                    let lower = func_name.to_lowercase();
+                    if lower == "shortestpath" || lower == "allshortestpaths" {
+                        let sp = self.parse_shortest_path_pattern()?;
+                        shortest_paths.push(sp);
+                        return Ok(());
+                    }
+                }
+            }
+        }
+        paths.push(self.parse_path_pattern()?);
+        Ok(())
+    }
+
+    /// Parse `variable = shortestPath((pattern))` or `variable = allShortestPaths((pattern))`.
+    fn parse_shortest_path_pattern(&mut self) -> Result<ShortestPathPattern, ParseError> {
+        let path_variable = self.expect_ident()?;
+        self.expect(&Token::Eq)?;
+        let func_name = self.expect_ident()?;
+        let all_paths = func_name.to_lowercase() == "allshortestpaths";
+        self.expect(&Token::LParen)?;
+        let pattern = self.parse_path_pattern()?;
+        self.expect(&Token::RParen)?;
+        Ok(ShortestPathPattern {
+            path_variable,
+            pattern,
+            all_paths,
+        })
     }
 
     fn parse_path_pattern(&mut self) -> Result<PathPattern, ParseError> {
@@ -836,6 +993,27 @@ impl Parser {
             });
         }
 
+        // [NOT] IN [list]
+        if self.check(&Token::In) {
+            self.advance();
+            let list = self.parse_addition()?;
+            return Ok(Expr::In {
+                expr: Box::new(left),
+                list: Box::new(list),
+                negated: false,
+            });
+        }
+        if self.check(&Token::Not) && self.peek_at(1) == &Token::In {
+            self.advance(); // consume NOT
+            self.advance(); // consume IN
+            let list = self.parse_addition()?;
+            return Ok(Expr::In {
+                expr: Box::new(left),
+                list: Box::new(list),
+                negated: true,
+            });
+        }
+
         let op = match self.peek() {
             Token::Eq => Some(BinOp::Eq),
             Token::Neq | Token::BangEq => Some(BinOp::Neq),
@@ -843,6 +1021,7 @@ impl Parser {
             Token::Gt => Some(BinOp::Gt),
             Token::Le => Some(BinOp::Le),
             Token::Ge => Some(BinOp::Ge),
+            Token::RegexMatch => Some(BinOp::RegexMatch),
             _ => None,
         };
 
@@ -979,19 +1158,59 @@ impl Parser {
                     target_type,
                 })
             }
+            Token::Case => self.parse_case_expr(),
+            Token::Exists => self.parse_exists_expr(),
             _ => Err(self.error(&format!("unexpected token: {:?}", self.peek()))),
         }
     }
 
     fn parse_list_literal(&mut self) -> Result<Expr, ParseError> {
         self.expect(&Token::LBracket)?;
-        let mut items = Vec::new();
-        if !self.check(&Token::RBracket) {
-            items.push(self.parse_expr()?);
-            while self.check(&Token::Comma) {
-                self.advance();
-                items.push(self.parse_expr()?);
+
+        // Empty list: []
+        if self.check(&Token::RBracket) {
+            self.advance();
+            return Ok(Expr::ListLit(vec![]));
+        }
+
+        // Detect list comprehension: [ident IN ...]
+        if let Token::Ident(name) = self.peek().clone() {
+            if self.peek_at(1) == &Token::In {
+                let variable = name;
+                self.advance(); // consume ident
+                self.advance(); // consume IN
+                let list = self.parse_expr()?;
+
+                let filter = if self.check(&Token::Where) {
+                    self.advance();
+                    Some(Box::new(self.parse_expr()?))
+                } else {
+                    None
+                };
+
+                let map_expr = if self.check(&Token::Pipe) {
+                    self.advance();
+                    Some(Box::new(self.parse_expr()?))
+                } else {
+                    None
+                };
+
+                self.expect(&Token::RBracket)?;
+                return Ok(Expr::ListComprehension {
+                    variable,
+                    list: Box::new(list),
+                    filter,
+                    map_expr,
+                });
             }
+        }
+
+        // Regular list literal
+        let mut items = Vec::new();
+        items.push(self.parse_expr()?);
+        while self.check(&Token::Comma) {
+            self.advance();
+            items.push(self.parse_expr()?);
         }
         self.expect(&Token::RBracket)?;
         Ok(Expr::ListLit(items))
@@ -1037,6 +1256,55 @@ impl Parser {
             distinct,
             args,
         })
+    }
+
+    fn parse_case_expr(&mut self) -> Result<Expr, ParseError> {
+        self.expect(&Token::Case)?;
+
+        // Simple form: CASE <operand> WHEN ...
+        // Searched form: CASE WHEN ...
+        let operand = if !self.check(&Token::When) {
+            Some(Box::new(self.parse_expr()?))
+        } else {
+            None
+        };
+
+        let mut when_clauses = Vec::new();
+        while self.check(&Token::When) {
+            self.advance();
+            let condition = self.parse_expr()?;
+            self.expect(&Token::Then)?;
+            let result = self.parse_expr()?;
+            when_clauses.push((condition, result));
+        }
+
+        if when_clauses.is_empty() {
+            return Err(self.error("CASE requires at least one WHEN clause"));
+        }
+
+        let else_result = if self.check(&Token::Else) {
+            self.advance();
+            Some(Box::new(self.parse_expr()?))
+        } else {
+            None
+        };
+
+        self.expect(&Token::End)?;
+
+        Ok(Expr::Case {
+            operand,
+            when_clauses,
+            else_result,
+        })
+    }
+
+    /// Parse `EXISTS { <query-body> }`.
+    fn parse_exists_expr(&mut self) -> Result<Expr, ParseError> {
+        self.expect(&Token::Exists)?;
+        self.expect(&Token::LBrace)?;
+        let query = self.parse_query_body()?;
+        self.expect(&Token::RBrace)?;
+        Ok(Expr::Exists(Box::new(query)))
     }
 
     // ── Token helpers ───────────────────────────────────────────

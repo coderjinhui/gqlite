@@ -3,7 +3,7 @@
 //! The physical plan specifies concrete algorithms (e.g., sequential scan,
 //! hash join) that the execution engine will run.
 
-use crate::parser::ast::{AlterTableAction, Direction, Expr, OrderByItem};
+use crate::parser::ast::{AlterTableAction, Direction, Expr, OrderByItem, QueryStatement};
 use crate::planner::logical::{BoundSetItem, JoinKey};
 use crate::types::data_type::DataType;
 
@@ -173,6 +173,20 @@ pub enum PhysicalPlan {
         max_hops: u32,
     },
 
+    /// Shortest-path BFS: returns a path (list of node IDs) from src to dst.
+    ShortestPath {
+        input: Box<PhysicalPlan>,
+        rel_table_name: String,
+        rel_table_id: u32,
+        direction: Direction,
+        src_alias: String,
+        dst_alias: String,
+        path_alias: String,
+        dst_table_id: Option<u32>,
+        max_hops: u32,
+        all_paths: bool,
+    },
+
     /// Expand a list expression into multiple rows.
     Unwind {
         input: Box<PhysicalPlan>,
@@ -188,6 +202,12 @@ pub enum PhysicalPlan {
         on_create: Vec<(usize, Expr)>,
         on_match: Vec<(usize, Expr)>,
     },
+
+    /// Execute a subquery and concatenate/cross-join results with input.
+    CallSubquery {
+        input: Box<PhysicalPlan>,
+        subquery: QueryStatement,
+    },
 }
 
 impl PhysicalPlan {
@@ -197,6 +217,7 @@ impl PhysicalPlan {
             PhysicalPlan::SeqScan { .. }
             | PhysicalPlan::CsrExpand { .. }
             | PhysicalPlan::RecursiveExpand { .. }
+            | PhysicalPlan::ShortestPath { .. }
             | PhysicalPlan::Filter { .. }
             | PhysicalPlan::Projection { .. }
             | PhysicalPlan::ReturnAll { .. }
@@ -208,6 +229,8 @@ impl PhysicalPlan {
             | PhysicalPlan::Union { .. }
             | PhysicalPlan::Unwind { .. }
             | PhysicalPlan::EmptyResult => true,
+
+            PhysicalPlan::CallSubquery { input, .. } => input.is_read_only(),
 
             PhysicalPlan::InsertNode { .. }
             | PhysicalPlan::InsertRel { .. }
@@ -318,6 +341,30 @@ pub fn to_physical(
             dst_table_id: *dst_table_id,
             min_hops: *min_hops,
             max_hops: *max_hops,
+        },
+
+        LogicalOperator::ShortestPath {
+            input,
+            rel_table_name,
+            rel_table_id,
+            direction,
+            src_alias,
+            dst_alias,
+            path_alias,
+            dst_table_id,
+            max_hops,
+            all_paths,
+        } => PhysicalPlan::ShortestPath {
+            input: Box::new(to_physical(input)),
+            rel_table_name: rel_table_name.clone(),
+            rel_table_id: *rel_table_id,
+            direction: *direction,
+            src_alias: src_alias.clone(),
+            dst_alias: dst_alias.clone(),
+            path_alias: path_alias.clone(),
+            dst_table_id: *dst_table_id,
+            max_hops: *max_hops,
+            all_paths: *all_paths,
         },
 
         LogicalOperator::InsertNode {
@@ -469,6 +516,11 @@ pub fn to_physical(
             properties: properties.clone(),
             on_create: on_create.clone(),
             on_match: on_match.clone(),
+        },
+
+        LogicalOperator::CallSubquery { input, subquery } => PhysicalPlan::CallSubquery {
+            input: Box::new(to_physical(input)),
+            subquery: subquery.clone(),
         },
     }
 }
