@@ -24,6 +24,7 @@ pub struct GraphEdge {
 pub struct GraphData {
     pub nodes: Vec<GraphNode>,
     pub edges: Vec<GraphEdge>,
+    pub primary_key: Option<String>,
 }
 
 #[tauri::command]
@@ -35,6 +36,14 @@ pub fn get_graph_data(
 ) -> Result<GraphData, String> {
     let db_guard = state.db.lock().unwrap();
     let db = db_guard.as_ref().ok_or("No database is open")?;
+
+    // Get primary key column name from catalog
+    let primary_key = {
+        let catalog = db.inner.catalog.read().unwrap();
+        catalog.get_node_table(&node_table).map(|entry| {
+            entry.columns[entry.primary_key_idx].name.clone()
+        })
+    };
 
     let mut nodes = Vec::new();
     let mut node_ids = std::collections::HashSet::new();
@@ -141,5 +150,5 @@ pub fn get_graph_data(
         }
     }
 
-    Ok(GraphData { nodes, edges })
+    Ok(GraphData { nodes, edges, primary_key })
 }
