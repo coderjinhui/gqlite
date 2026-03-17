@@ -25,6 +25,7 @@ Query: GQL String
 | gqlite-core | `crates/core/` | 引擎核心：存储、规划、执行、事务（依赖 gqlite-parser） |
 | gqlite-cli | `crates/cli/` | 交互式 REPL (rustyline)，Tab 补全 + 多语句执行 |
 | gqlite-gui | `crates/gui/` | 桌面 GUI 管理工具 (Tauri v2 + Svelte 5 + G6 图可视化) |
+|  | | → [memory.md](crates/gui/memory.md) / [technology.md](crates/gui/technology.md) |
 
 每个 crate 必须包含：`Cargo.toml` + `src/` + `tests/` + `doc/`
 

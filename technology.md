@@ -18,21 +18,10 @@
 | 正则匹配 | regex | ^1 | Cypher `=~` 操作符 |
 | 日期时间 | chrono | ^0.4 (serde) | Date/DateTime/Duration 类型 |
 | REPL | rustyline | ^14 | CLI 交互式编辑，Tab 补全 + 灰色提示 (derive feature) |
-| 桌面框架 | tauri | ^2 | GUI 跨平台桌面应用（gqlite-gui） |
-| 文件对话框 | tauri-plugin-dialog | ^2 | Tauri 文件对话框插件 |
+| 桌面框架 | tauri | ^2 | GUI 跨平台桌面应用 → 详见 [crates/gui/technology.md](crates/gui/technology.md) |
 | Shell | tauri-plugin-shell | ^2 | Tauri Shell 插件 |
 
-## 前端依赖 (gqlite-gui)
-
-| 功能 | 包名 | 版本 | 用途 |
-|------|------|------|------|
-| 前端框架 | svelte | ^5 | GUI 前端 UI 框架 |
-| 构建工具 | vite | ^6 | 前端开发/构建 |
-| CSS 框架 | tailwindcss | ^4 | 原子化 CSS |
-| IPC | @tauri-apps/api | ^2 | Tauri 前后端通信 |
-| 查询编辑器 | @codemirror/* | ^6 | GQL 查询编辑器 (view/state/language/lang-sql/commands) |
-| 图可视化 | @antv/g6 | ^5 | 图数据力导向/层级布局可视化 |
-| 文件对话框 | @tauri-apps/plugin-dialog | ^2 | 前端调用文件对话框 |
+> GUI 前端依赖（Svelte、G6、CodeMirror 等）详见 [crates/gui/technology.md](crates/gui/technology.md)
 
 ## 核心数据结构
 
