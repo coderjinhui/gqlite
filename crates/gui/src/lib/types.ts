@@ -47,6 +47,7 @@ export interface GraphData {
   nodes: GraphNode[];
   edges: GraphEdge[];
   primary_key: string | null;
+  dst_primary_key: string | null;
 }
 
 export type Page = "query" | "tables" | "graph";

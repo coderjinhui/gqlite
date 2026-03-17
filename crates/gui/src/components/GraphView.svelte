@@ -60,6 +60,8 @@
     const G6 = await import("@antv/g6");
 
     const pkCol = graphData.primary_key;
+    const dstPkCol = graphData.dst_primary_key;
+    const srcLabel = selectedNodeTable;
 
     const nodeColor = (label: string) => {
       const allLabels = [...new Set(graphData!.nodes.map((n) => n.label))];
@@ -67,21 +69,25 @@
       return colors[idx % colors.length];
     };
 
-    const nodes = graphData.nodes.map((n) => ({
-      id: n.id,
-      data: {
-        label: n.label,
-        properties: n.properties,
-      },
-      style: {
-        fill: nodeColor(n.label),
-        stroke: nodeColor(n.label),
-        labelText: getNodeLabel(n.properties, pkCol, n.label),
-        labelFill: "#fff",
-        labelFontSize: 10,
-        size: 32,
-      },
-    }));
+    const nodes = graphData.nodes.map((n) => {
+      // Use source PK for source table nodes, destination PK for others
+      const pk = n.label === srcLabel ? pkCol : dstPkCol;
+      return {
+        id: n.id,
+        data: {
+          label: n.label,
+          properties: n.properties,
+        },
+        style: {
+          fill: nodeColor(n.label),
+          stroke: nodeColor(n.label),
+          labelText: getNodeLabel(n.properties, pk, n.label),
+          labelFill: "#fff",
+          labelFontSize: 10,
+          size: 32,
+        },
+      };
+    });
 
     const edges = graphData.edges.map((e, i) => ({
       id: `edge-${i}`,
