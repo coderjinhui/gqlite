@@ -23,7 +23,7 @@ Query: GQL String
 |-------|------|------|
 | gqlite-parser | `crates/parser/` | 独立 Cypher 解析器：Lexer, AST, Parser, DataType |
 | gqlite-core | `crates/core/` | 引擎核心：存储、规划、执行、事务（依赖 gqlite-parser） |
-| gqlite-cli | `crates/cli/` | 交互式 REPL (rustyline)，Tab 补全 + 灰色提示 |
+| gqlite-cli | `crates/cli/` | 交互式 REPL (rustyline)，Tab 补全 + 多语句执行 |
 
 每个 crate 必须包含：`Cargo.toml` + `src/` + `tests/` + `doc/`
 
@@ -33,8 +33,9 @@ Query: GQL String
 |------|------|------|
 | token | `src/token.rs` | logos Lexer，Cypher 词法分析 |
 | ast | `src/ast.rs` | AST 节点类型定义 |
-| parser | `src/parser.rs` | 递归下降 Parser |
-| data_type | `src/data_type.rs` | DataType 枚举（规范定义） |
+| parser | `src/parser.rs` | 递归下降 Parser（parse_query + parse_all 多语句） |
+| data_type | `src/data_type.rs` | DataType 枚举（含 Date/DateTime/Duration） |
+| doc | `doc/design.md` | 语法支持文档 |
 | tests | `tests/` | parser_test.rs, token_test.rs, data_type_test.rs |
 
 ## gqlite-core 模块索引 (crates/core/)
@@ -48,10 +49,12 @@ Query: GQL String
 | binder | `src/binder/` | 语义绑定：变量解析、表名/列名匹配 |
 | planner | `src/planner/` | 逻辑计划生成 + 物理计划转换 |
 | executor | `src/executor/` | Engine (物化执行), DataChunk |
-| functions | `src/functions/` | FunctionRegistry, 标量函数, 聚合函数 |
+| functions | `src/functions/` | FunctionRegistry, 标量/聚合/数学/日期时间函数 |
+| procedure | `src/procedure/` | CALL 过程框架 + 图算法（PageRank, Dijkstra, WCC 等） |
 | transaction | `src/transaction/` | TransactionManager (SWMR), WAL |
 | error | `src/error.rs` | GqliteError 统一错误类型 |
-| tests | `tests/` | 25 个集成测试文件（`<module>_test.rs`） |
+| doc | `doc/design.md` | 架构设计文档 |
+| tests | `tests/` | 45 个集成测试文件（`<module>_test.rs`） |
 
 ## 设计与计划文档
 
@@ -76,6 +79,8 @@ Query: GQL String
 - **P1 导入导出 (049-051)**: ✅ 全部完成 (COPY FROM/TO CSV)
 - **P1 函数+接口 (052-056)**: ✅ 全部完成 (字符串函数 + 列表函数 + CAST + PreparedStatement + DatabaseConfig)
 - **P1 并行+路径 (057-060)**: ✅ 全部完成 (Pipeline切分 + rayon并行 + 可变长路径 + MVCC)
+- **P2 图查询算法 (061a-061r)**: ✅ 全部完成 (CASE/IN/EXISTS/正则/列表推导 + 图算法 8 种 + 数学函数 + 日期时间 + 子查询)
+- **Post-plan 增强**: ✅ CLI 多语句执行（分号分隔）+ 各 crate `doc/` 文档
 
 ## 关键设计决策
 
@@ -86,10 +91,8 @@ Query: GQL String
 | 执行模型 | 物化 (Intermediate 全量返回) | 实现简单，后续可改流式 |
 | 并发模型 | SWMR (parking_lot) + MVCC | 单写多读 + 快照隔离，`create_ts`/`delete_ts` per row |
 | 序列化 | bincode | 高性能二进制，用于 Catalog 持久化 |
-| 查询语言 | Cypher 子集 | MATCH/WHERE/RETURN/CREATE/SET/DELETE/ORDER BY/LIMIT/SKIP + DDL + 聚合 |
+| 查询语言 | Cypher 子集 | MATCH/WHERE/RETURN/CREATE/SET/DELETE + WITH/ORDER BY/LIMIT + CASE/IN/EXISTS + CALL + UNION/MERGE/UNWIND |
 
 ## 测试
 
-272 个测试，全部在 `tests/` 目录中（集成测试），零 warning。运行：`cargo test`
-
-（含 auto-checkpoint 集成测试，总计 285 个）
+423 个测试（parser 3 文件 + core 45 文件 + cli 1 文件），全部通过，零 warning。运行：`cargo test`

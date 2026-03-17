@@ -14,13 +14,16 @@
 | 哈希 | ahash | ^0.8 | 高性能 HashMap |
 | 并发锁 | parking_lot | ^0.12 | SWMR 事务管理 |
 | CRC 校验 | crc32fast | ^1 | WAL 记录校验和 |
+| 并行执行 | rayon | ^1 | HashJoin/Union 并行 |
+| 正则匹配 | regex | ^1 | Cypher `=~` 操作符 |
+| 日期时间 | chrono | ^0.4 (serde) | Date/DateTime/Duration 类型 |
 | REPL | rustyline | ^14 | CLI 交互式编辑，Tab 补全 + 灰色提示 (derive feature) |
 
 ## 核心数据结构
 
 | 结构 | 位置 | 用途 |
 |------|------|------|
-| Value | `types/value.rs` | 统一值类型 (Int64/Float64/Bool/String/InternalId/Null) |
+| Value | `types/value.rs` | 统一值类型 (Int64/Double/Bool/String/InternalId/Null/List/Date/DateTime/Duration) |
 | DataType | `types/data_type.rs` | 类型枚举 |
 | InternalId | `types/graph.rs` | 节点/边内部 ID (table_id, offset) |
 | ColumnChunk | `storage/column_chunk.rs` | 定长列块，支持 flush/load |
