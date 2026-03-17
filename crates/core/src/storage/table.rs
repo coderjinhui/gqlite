@@ -348,10 +348,31 @@ impl RelTable {
         dst: InternalId,
         props: &[Value],
     ) -> Result<u64, GqliteError> {
+        let (src_group_idx, src_offset_in_group) = NodeGroup::locate(src.offset);
+
+        // Check for duplicate: same src -> dst edge already exists
+        // 1. Check compacted CSR
+        if let Some(csr) = self.fwd_groups.get(src_group_idx as usize) {
+            let neighbors = csr.get_neighbors(src_offset_in_group);
+            if neighbors.contains(&dst.offset) {
+                return Err(GqliteError::Execution(format!(
+                    "duplicate relationship: {}:{} -> {}:{}",
+                    src.table_id, src.offset, dst.table_id, dst.offset
+                )));
+            }
+            // 2. Check pending inserts
+            for pending in &csr.pending_inserts {
+                if pending.src_offset == src_offset_in_group && pending.dst_offset == dst.offset {
+                    return Err(GqliteError::Execution(format!(
+                        "duplicate relationship: {}:{} -> {}:{}",
+                        src.table_id, src.offset, dst.table_id, dst.offset
+                    )));
+                }
+            }
+        }
+
         let rel_id = self.next_rel_id;
         self.next_rel_id += 1;
-
-        let (src_group_idx, src_offset_in_group) = NodeGroup::locate(src.offset);
         let (dst_group_idx, dst_offset_in_group) = NodeGroup::locate(dst.offset);
 
         // Ensure FWD group exists
