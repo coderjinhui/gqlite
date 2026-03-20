@@ -1,98 +1,103 @@
 # gqlite
 
-**A lightweight, embeddable graph database for Rust.**
+## What Is gqlite?
 
-gqlite is to graph databases what SQLite is to relational databases — a zero-config, serverless, single-file graph database engine that you can embed directly into your application.
+gqlite is an embedded graph database written in Rust, with:
 
----
+- embedded deployment
+- single-file storage
+- a Rust-native API
+- a Cypher / GQL-inspired query surface
+- local transactions, WAL, checkpoint, and recovery support
 
-**gqlite —— 轻量级嵌入式图数据库**
+Typical use cases include:
 
-gqlite 之于图数据库，正如 SQLite 之于关系型数据库 —— 零配置、无服务器、单文件的图数据库引擎，可直接嵌入应用程序。
+- embedding graph storage directly into a Rust application
+- shipping graph-powered desktop or local-first tools
+- running graph queries without operating a separate database server
+- prototyping graph workloads with a small deployment footprint
 
-## Features / 特性
+## How To Use gqlite
 
-- **Embedded** — link as a library, no separate server process
-- **Single-file storage** — one `.graph` file holds the entire database
-- **GQL query language** — subset of the ISO GQL / openCypher standard
-- **CSR adjacency** — Compressed Sparse Row for fast graph traversal
-- **Columnar properties** — efficient property storage and filtering
-
-## Quick Start / 快速开始
+### As a Rust library
 
 ```rust
 use gqlite_core::Database;
 
-fn main() {
-    let db = Database::open("my.graph").unwrap();
-    let result = db.query("MATCH (n:Person) RETURN n").unwrap();
-    println!("{} rows", result.rows.len());
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let db = Database::open("example.graph")?;
+
+    db.execute("CREATE NODE TABLE Person(id INT64, name STRING, PRIMARY KEY(id))")?;
+    db.execute("CREATE REL TABLE KNOWS(FROM Person TO Person)")?;
+
+    db.execute("CREATE (p:Person {id: 1, name: 'Alice'})")?;
+    db.execute("CREATE (p:Person {id: 2, name: 'Bob'})")?;
+    db.execute(
+        "MATCH (a:Person), (b:Person) WHERE a.id = 1 AND b.id = 2 \
+         CREATE (a)-[:KNOWS]->(b)",
+    )?;
+
+    let result = db.query(
+        "MATCH (a:Person)-[:KNOWS]->(b:Person) RETURN a.name, b.name",
+    )?;
+
+    println!("rows: {}", result.num_rows());
+    Ok(())
 }
 ```
 
-### CLI
+### From the CLI
 
 ```bash
-cargo run --bin gqlite -- my.graph
+cargo run --bin gqlite -- example.graph
 ```
 
-```
-gqlite v0.1.0
-Connected to: my.graph
-gqlite> MATCH (n) RETURN n
-(empty result set)
-gqlite> .quit
-```
+### More documentation
 
-## Architecture / 架构概览
+- Quick start: [docs/quickstart.md](docs/quickstart.md)
+- Architecture: [docs/architecture.md](docs/architecture.md)
+- Known issues: [docs/known-issues.md](docs/known-issues.md)
 
-```
-┌──────────────────────────────────────────┐
-│               gqlite-cli                 │  Interactive REPL
-├──────────────────────────────────────────┤
-│               gqlite-core                │  Core library
-│  ┌─────────┐ ┌─────────┐ ┌───────────┐  │
-│  │ Parser  │→│ Planner │→│ Executor  │  │
-│  └─────────┘ └─────────┘ └─────┬─────┘  │
-│                                 │        │
-│  ┌─────────┐ ┌─────────────────┴──────┐  │
-│  │ Catalog │ │       Storage          │  │
-│  │         │ │  CSR + Column + Pager  │  │
-│  └─────────┘ └────────────────────────┘  │
-├──────────────────────────────────────────┤
-│            .graph file (disk)            │
-└──────────────────────────────────────────┘
-```
+## Features
 
-See [`docs/architecture.md`](docs/architecture.md) for the detailed design document.
+- Embedded database engine with no standalone server process
+- Single-file `.graph` database format
+- Schema-based property graph model with node tables and relationship tables
+- Cypher / GQL-inspired query support for `MATCH`, `CREATE`, `MERGE`, `DELETE`, `WITH`, `UNWIND`, `EXPLAIN`, and more
+- Transactions, WAL, checkpoint, reopen, and recovery flows
+- Graph traversal and built-in graph algorithms such as PageRank, WCC, shortest path, and centrality procedures
+- CSV import / export support
+- CLI for interactive querying
+- Desktop GUI workspace for local database exploration and management
 
-## Project Structure / 项目结构
+For full syntax and implementation details, see [docs/quickstart.md](docs/quickstart.md) and the documents under [docs/](docs).
 
-```
-crates/
-├── core/    # gqlite-core — storage, parser, planner, executor, catalog
-│   └── tests/   # Integration tests
-└── cli/     # gqlite-cli  — interactive REPL
-examples/    # Usage examples
-docs/        # Design documents
-```
+## Project Structure
 
-## Roadmap / 路线图
+This repository is a Rust workspace with a few main packages:
 
-- [x] Project skeleton & module structure
-- [ ] Storage engine — page manager, .graph file format
-- [ ] GQL parser — lexer, recursive descent parser
-- [ ] CSR adjacency index
-- [ ] Columnar property storage
-- [ ] Query planner (logical → physical)
-- [ ] Basic query execution (MATCH + RETURN)
-- [ ] CREATE / DELETE mutations
-- [ ] WHERE clause filtering
-- [ ] REPL improvements (history, completion)
-- [ ] Transactions & WAL
-- [ ] Benchmarks
+- `crates/core` — `gqlite-core`, the main embedded database engine: catalog, storage, planner, executor, transactions, and graph algorithms
+- `crates/parser` — `gqlite-parser`, the query parser crate used by the engine
+- `crates/cli` — `gqlite-cli`, the command-line interface and REPL
+- `crates/gui` — the frontend assets for the desktop GUI
+- `crates/gui/src-tauri` — the Tauri desktop shell that connects the GUI to `gqlite-core`
+- `docs` — architecture notes, roadmap, design docs, and project references
+- `examples` — small usage examples
 
-## License / 许可证
+If you only want to embed gqlite into your own application, `gqlite-core` is the primary package to use.
+
+## Roadmap
+
+The project roadmap is documented in [docs/roadmap-production.md](docs/roadmap-production.md). At a high level, the current direction is:
+
+1. Improve correctness in transactions, MVCC behavior, and recovery
+2. Harden the storage engine and file format
+3. Expand performance, testing, tooling, and operational visibility
+4. Stabilize APIs, file format compatibility, and release readiness
+
+This README intentionally stays high level. See the roadmap document for the detailed production plan.
+
+## License
 
 Licensed under either of:
 

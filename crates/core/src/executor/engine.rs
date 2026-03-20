@@ -2198,6 +2198,20 @@ fn eval_literal(expr: &Expr) -> Result<Value, GqliteError> {
         Expr::StringLit(s) => Ok(Value::String(s.clone())),
         Expr::BoolLit(b) => Ok(Value::Bool(*b)),
         Expr::NullLit => Ok(Value::Null),
+        Expr::UnaryOp { op: UnaryOp::Neg, expr: inner } => match eval_literal(inner)? {
+            Value::Int(i) => Ok(Value::Int(-i)),
+            Value::Float(f) => Ok(Value::Float(-f)),
+            other => Err(GqliteError::Execution(format!("cannot negate value: {:?}", other))),
+        },
+        Expr::UnaryOp { op: UnaryOp::Not, expr: inner } => match eval_literal(inner)? {
+            Value::Bool(b) => Ok(Value::Bool(!b)),
+            Value::Null => Ok(Value::Null),
+            other => Err(GqliteError::Execution(format!("cannot apply NOT to value: {:?}", other))),
+        },
+        Expr::ListLit(items) => {
+            let vals: Result<Vec<Value>, _> = items.iter().map(eval_literal).collect();
+            Ok(Value::List(vals?))
+        }
         _ => Err(GqliteError::Execution("expression requires row context".into())),
     }
 }
