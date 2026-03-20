@@ -12,11 +12,12 @@
 
 ## 开发约定
 
-- 语言：Rust 2021 edition，最低 1.70
+- 语言：Rust 2021 edition，最低 1.89
 - 构建：`cargo build`，测试：`cargo test`
-- 错误处理：统一使用 `GqliteError`，新增变体在 `error.rs`
+- 验收：`bash scripts/check.sh --strict`（fmt + clippy -D warnings + test）
+- 错误处理：统一使用 `GqliteError` + `ErrorCode`，新增变体在 `error.rs`
 - 锁获取顺序：catalog 先于 storage
-- 实现任务按 `research/plan/000-index.md` 顺序，完成后更新状态为 ✅
+- 生产化任务索引：`docs/tasks/000-index.md`（38 个任务，全部完成）
 
 ## Crate 结构规范
 
@@ -41,7 +42,7 @@ crates/<name>/
 | 变更类型 | 更新文件 |
 |----------|----------|
 | 新增模块/依赖 | `memory.md` + `technology.md` |
-| 任务完成 | `memory.md` 进度 + `research/plan/000-index.md` 状态 |
+| 任务完成 | `docs/tasks/000-index.md` 状态 |
 | 架构变更 | `memory.md` 架构总览 |
 
 ## 技术复用优先
