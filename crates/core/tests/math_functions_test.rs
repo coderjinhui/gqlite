@@ -71,22 +71,19 @@ fn math_to_integer_to_float() {
     // toInteger: Int passthrough
     assert_eq!(fn_to_integer(&[Value::Int(42)]).unwrap(), Value::Int(42));
     // toInteger: String parse
-    assert_eq!(
-        fn_to_integer(&[Value::String("123".into())]).unwrap(),
-        Value::Int(123)
-    );
+    assert_eq!(fn_to_integer(&[Value::String("123".into())]).unwrap(), Value::Int(123));
     // toInteger: String parse failure
     assert!(fn_to_integer(&[Value::String("abc".into())]).is_err());
 
     // toFloat: Int -> Float
     assert_eq!(fn_to_float(&[Value::Int(42)]).unwrap(), Value::Float(42.0));
     // toFloat: Float passthrough
-    assert_eq!(fn_to_float(&[Value::Float(3.14)]).unwrap(), Value::Float(3.14));
+    #[allow(clippy::approx_constant)]
+    {
+        assert_eq!(fn_to_float(&[Value::Float(3.14)]).unwrap(), Value::Float(3.14));
+    }
     // toFloat: String parse
-    assert_eq!(
-        fn_to_float(&[Value::String("2.5".into())]).unwrap(),
-        Value::Float(2.5)
-    );
+    assert_eq!(fn_to_float(&[Value::String("2.5".into())]).unwrap(), Value::Float(2.5));
     // toFloat: String parse failure
     assert!(fn_to_float(&[Value::String("xyz".into())]).is_err());
 }
@@ -95,7 +92,7 @@ fn math_to_integer_to_float() {
 fn math_rand() {
     let result = fn_rand(&[]).unwrap();
     if let Value::Float(v) = result {
-        assert!(v >= 0.0 && v < 1.0, "rand() should return [0, 1), got {}", v);
+        assert!((0.0..1.0).contains(&v), "rand() should return [0, 1), got {}", v);
     } else {
         panic!("rand() should return Float");
     }

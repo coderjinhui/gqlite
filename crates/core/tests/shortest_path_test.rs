@@ -2,10 +2,8 @@ use gqlite_core::Database;
 
 fn setup_graph() -> Database {
     let db = Database::in_memory();
-    db.execute("CREATE NODE TABLE Person(id INT64, name STRING, PRIMARY KEY(id))")
-        .unwrap();
-    db.execute("CREATE REL TABLE KNOWS(FROM Person TO Person)")
-        .unwrap();
+    db.execute("CREATE NODE TABLE Person(id INT64, name STRING, PRIMARY KEY(id))").unwrap();
+    db.execute("CREATE REL TABLE KNOWS(FROM Person TO Person)").unwrap();
     // Create: A(1), B(2), C(3), D(4)
     db.execute("CREATE (p:Person {id: 1, name: 'A'})").unwrap();
     db.execute("CREATE (p:Person {id: 2, name: 'B'})").unwrap();

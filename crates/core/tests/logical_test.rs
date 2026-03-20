@@ -32,9 +32,7 @@ fn test_catalog() -> Catalog {
             "id",
         )
         .unwrap();
-    catalog
-        .create_rel_table("KNOWS", "Person", "Person", vec![])
-        .unwrap();
+    catalog.create_rel_table("KNOWS", "Person", "Person", vec![]).unwrap();
     catalog
 }
 
@@ -71,10 +69,7 @@ fn scan_with_filter() {
 #[test]
 fn scan_with_expand() {
     let catalog = test_catalog();
-    let plan = plan_query(
-        &catalog,
-        "MATCH (a:Person)-[r:KNOWS]->(b:Person) RETURN a, b",
-    );
+    let plan = plan_query(&catalog, "MATCH (a:Person)-[r:KNOWS]->(b:Person) RETURN a, b");
     match &plan {
         LogicalOperator::Projection { input, .. } => {
             assert!(matches!(**input, LogicalOperator::Expand { .. }));
@@ -86,20 +81,16 @@ fn scan_with_expand() {
 #[test]
 fn create_node() {
     let catalog = test_catalog();
-    let plan = plan_query(
-        &catalog,
-        "CREATE (n:Person {id: 1, name: 'Alice'})",
-    );
+    let plan = plan_query(&catalog, "CREATE (n:Person {id: 1, name: 'Alice'})");
     assert!(matches!(plan, LogicalOperator::InsertNode { .. }));
 }
 
 #[test]
 fn ddl_create_node_table() {
     let catalog = Catalog::new();
-    let stmt = Parser::parse_query(
-        "CREATE NODE TABLE Movie (id INT64, title STRING, PRIMARY KEY (id))",
-    )
-    .unwrap();
+    let stmt =
+        Parser::parse_query("CREATE NODE TABLE Movie (id INT64, title STRING, PRIMARY KEY (id))")
+            .unwrap();
     let mut binder = Binder::new(&catalog);
     let bound = binder.bind(&stmt).unwrap();
     let planner = Planner::new(&catalog);

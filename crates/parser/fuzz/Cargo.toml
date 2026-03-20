@@ -1,0 +1,30 @@
+[package]
+name = "gqlite-parser-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[workspace]
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+
+[dependencies.gqlite-parser]
+path = ".."
+
+[[bin]]
+name = "fuzz_parse_query"
+path = "fuzz_targets/fuzz_parse_query.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_parse_all"
+path = "fuzz_targets/fuzz_parse_all.rs"
+test = false
+doc = false
+bench = false

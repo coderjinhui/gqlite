@@ -1,6 +1,4 @@
-use gqlite_core::storage::compression::{
-    compress_int64, compressed_size_int64, decompress_int64,
-};
+use gqlite_core::storage::compression::{compress_int64, compressed_size_int64, decompress_int64};
 
 #[test]
 fn roundtrip_empty() {

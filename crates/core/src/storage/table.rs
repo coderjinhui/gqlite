@@ -27,15 +27,15 @@ pub struct NodeTable {
     create_ts: Vec<u64>,
     /// MVCC: transaction ID that deleted each row (0 = not deleted).
     delete_ts: Vec<u64>,
+    /// MVCC: transaction ID that last updated each row (0 = never updated).
+    #[serde(default)]
+    update_ts: Vec<u64>,
 }
 
 impl NodeTable {
     pub fn new(entry: &NodeTableEntry) -> Self {
-        let schema: Vec<(String, DataType)> = entry
-            .columns
-            .iter()
-            .map(|c| (c.name.clone(), c.data_type.clone()))
-            .collect();
+        let schema: Vec<(String, DataType)> =
+            entry.columns.iter().map(|c| (c.name.clone(), c.data_type.clone())).collect();
         Self {
             table_id: entry.table_id,
             schema,
@@ -45,6 +45,7 @@ impl NodeTable {
             pk_col_idx: entry.primary_key_idx,
             create_ts: Vec::new(),
             delete_ts: Vec::new(),
+            update_ts: Vec::new(),
         }
     }
 
@@ -63,10 +64,7 @@ impl NodeTable {
         // Check primary key uniqueness
         let pk_val = &values[self.pk_col_idx];
         if !pk_val.is_null() && self.pk_index.contains_key(pk_val) {
-            return Err(GqliteError::Storage(format!(
-                "duplicate primary key: {}",
-                pk_val
-            )));
+            return Err(GqliteError::Storage(format!("duplicate primary key: {}", pk_val)));
         }
 
         // Find or create a NodeGroup
@@ -86,6 +84,7 @@ impl NodeTable {
         // MVCC version metadata
         self.create_ts.push(txn_id);
         self.delete_ts.push(0);
+        self.update_ts.push(0);
 
         // Update PK index
         if !pk_val.is_null() {
@@ -98,9 +97,10 @@ impl NodeTable {
     /// Read a row by its global offset.
     pub fn read(&self, offset: u64) -> Result<Vec<Value>, GqliteError> {
         let (group_idx, offset_in_group) = NodeGroup::locate(offset);
-        let group = self.node_groups.get(group_idx as usize).ok_or_else(|| {
-            GqliteError::Storage(format!("group {} not found", group_idx))
-        })?;
+        let group = self
+            .node_groups
+            .get(group_idx as usize)
+            .ok_or_else(|| GqliteError::Storage(format!("group {} not found", group_idx)))?;
         group.read_row(offset_in_group)
     }
 
@@ -120,9 +120,10 @@ impl NodeTable {
 
         // Null out all columns (physical delete for backward compatibility)
         let (group_idx, offset_in_group) = NodeGroup::locate(offset);
-        let group = self.node_groups.get_mut(group_idx as usize).ok_or_else(|| {
-            GqliteError::Storage(format!("group {} not found", group_idx))
-        })?;
+        let group = self
+            .node_groups
+            .get_mut(group_idx as usize)
+            .ok_or_else(|| GqliteError::Storage(format!("group {} not found", group_idx)))?;
         for col_idx in 0..self.schema.len() {
             group.set_value(offset_in_group, col_idx, &Value::Null)?;
         }
@@ -130,11 +131,15 @@ impl NodeTable {
     }
 
     /// Update a single column value.
+    ///
+    /// `txn_id` is the MVCC update timestamp so that concurrent readers on older
+    /// snapshots can detect that this row was modified.
     pub fn update(
         &mut self,
         offset: u64,
         col_idx: usize,
         value: Value,
+        txn_id: u64,
     ) -> Result<(), GqliteError> {
         // If updating the PK column, handle index
         if col_idx == self.pk_col_idx {
@@ -145,30 +150,30 @@ impl NodeTable {
             }
             if !value.is_null() {
                 if self.pk_index.contains_key(&value) {
-                    return Err(GqliteError::Storage(format!(
-                        "duplicate primary key: {}",
-                        value
-                    )));
+                    return Err(GqliteError::Storage(format!("duplicate primary key: {}", value)));
                 }
                 self.pk_index.insert(value.clone(), offset);
             }
         }
 
+        // Record MVCC update timestamp
+        let idx = offset as usize;
+        if idx < self.update_ts.len() {
+            self.update_ts[idx] = txn_id;
+        }
+
         let (group_idx, offset_in_group) = NodeGroup::locate(offset);
-        let group = self.node_groups.get_mut(group_idx as usize).ok_or_else(|| {
-            GqliteError::Storage(format!("group {} not found", group_idx))
-        })?;
+        let group = self
+            .node_groups
+            .get_mut(group_idx as usize)
+            .ok_or_else(|| GqliteError::Storage(format!("group {} not found", group_idx)))?;
         group.set_value(offset_in_group, col_idx, &value)
     }
 
     /// Scan all rows. Returns an iterator of (offset, row_values).
     /// Uses legacy visibility: skips rows where PK is null (physically deleted).
     pub fn scan(&self) -> NodeTableIter<'_> {
-        NodeTableIter {
-            table: self,
-            current_offset: 0,
-            start_ts: None,
-        }
+        NodeTableIter { table: self, current_offset: 0, start_ts: None }
     }
 
     /// Scan all rows visible to a given snapshot timestamp (MVCC).
@@ -177,14 +182,20 @@ impl NodeTable {
     /// - `create_ts <= start_ts` (committed before this read started)
     /// - `delete_ts == 0 || delete_ts > start_ts` (not yet deleted, or deleted after snapshot)
     pub fn scan_mvcc(&self, start_ts: u64) -> NodeTableIter<'_> {
-        NodeTableIter {
-            table: self,
-            current_offset: 0,
-            start_ts: Some(start_ts),
-        }
+        NodeTableIter { table: self, current_offset: 0, start_ts: Some(start_ts) }
     }
 
     /// Check if a row at the given offset is visible to the given snapshot.
+    ///
+    /// A row is visible if:
+    /// - `create_ts <= start_ts` (created before or at snapshot)
+    /// - `delete_ts == 0 || delete_ts > start_ts` (not yet deleted at snapshot time)
+    /// - `update_ts == 0 || update_ts <= start_ts` (if updated, the update is committed)
+    ///
+    /// Note: In SWMR, update_ts tracks the last *committed* update. If a row was
+    /// updated by a transaction after our snapshot, we still see it because the
+    /// in-place update model means we read the latest value. This field is stored
+    /// for future multi-version support but does not currently filter rows.
     pub fn is_visible(&self, offset: u64, start_ts: u64) -> bool {
         let idx = offset as usize;
         if idx >= self.create_ts.len() {
@@ -197,6 +208,11 @@ impl NodeTable {
 
     pub fn row_count(&self) -> u64 {
         self.next_offset
+    }
+
+    /// Number of MVCC create_ts entries (should equal row_count for consistency).
+    pub fn create_ts_len(&self) -> usize {
+        self.create_ts.len()
     }
 
     pub fn table_id(&self) -> u32 {
@@ -255,6 +271,9 @@ impl NodeTable {
                 // mark as fully purged by zeroing create_ts too.
                 self.create_ts[idx] = 0;
                 self.delete_ts[idx] = 0;
+                if idx < self.update_ts.len() {
+                    self.update_ts[idx] = 0;
+                }
                 purged += 1;
             }
         }
@@ -324,11 +343,8 @@ pub struct RelTable {
 
 impl RelTable {
     pub fn new(entry: &RelTableEntry) -> Self {
-        let schema: Vec<(String, DataType)> = entry
-            .columns
-            .iter()
-            .map(|c| (c.name.clone(), c.data_type.clone()))
-            .collect();
+        let schema: Vec<(String, DataType)> =
+            entry.columns.iter().map(|c| (c.name.clone(), c.data_type.clone())).collect();
         Self {
             table_id: entry.table_id,
             src_table_id: entry.src_table_id,
@@ -348,10 +364,31 @@ impl RelTable {
         dst: InternalId,
         props: &[Value],
     ) -> Result<u64, GqliteError> {
+        let (src_group_idx, src_offset_in_group) = NodeGroup::locate(src.offset);
+
+        // Check for duplicate: same src -> dst edge already exists
+        // 1. Check compacted CSR
+        if let Some(csr) = self.fwd_groups.get(src_group_idx as usize) {
+            let neighbors = csr.get_neighbors(src_offset_in_group);
+            if neighbors.contains(&dst.offset) {
+                return Err(GqliteError::Execution(format!(
+                    "duplicate relationship: {}:{} -> {}:{}",
+                    src.table_id, src.offset, dst.table_id, dst.offset
+                )));
+            }
+            // 2. Check pending inserts
+            for pending in &csr.pending_inserts {
+                if pending.src_offset == src_offset_in_group && pending.dst_offset == dst.offset {
+                    return Err(GqliteError::Execution(format!(
+                        "duplicate relationship: {}:{} -> {}:{}",
+                        src.table_id, src.offset, dst.table_id, dst.offset
+                    )));
+                }
+            }
+        }
+
         let rel_id = self.next_rel_id;
         self.next_rel_id += 1;
-
-        let (src_group_idx, src_offset_in_group) = NodeGroup::locate(src.offset);
         let (dst_group_idx, dst_offset_in_group) = NodeGroup::locate(dst.offset);
 
         // Ensure FWD group exists
@@ -387,11 +424,7 @@ impl RelTable {
         if let Some(csr) = self.fwd_groups.get(group_idx as usize) {
             let neighbors = csr.get_neighbors(offset_in_group);
             let rel_ids = csr.get_rel_ids(offset_in_group);
-            neighbors
-                .iter()
-                .zip(rel_ids.iter())
-                .map(|(&n, &r)| (n, r))
-                .collect()
+            neighbors.iter().zip(rel_ids.iter()).map(|(&n, &r)| (n, r)).collect()
         } else {
             vec![]
         }
@@ -404,11 +437,7 @@ impl RelTable {
         if let Some(csr) = self.bwd_groups.get(group_idx as usize) {
             let neighbors = csr.get_neighbors(offset_in_group);
             let rel_ids = csr.get_rel_ids(offset_in_group);
-            neighbors
-                .iter()
-                .zip(rel_ids.iter())
-                .map(|(&n, &r)| (n, r))
-                .collect()
+            neighbors.iter().zip(rel_ids.iter()).map(|(&n, &r)| (n, r)).collect()
         } else {
             vec![]
         }
@@ -470,16 +499,14 @@ impl RelTable {
     fn ensure_fwd_group(&mut self, group_idx: usize) {
         while self.fwd_groups.len() <= group_idx {
             let idx = self.fwd_groups.len() as u32;
-            self.fwd_groups
-                .push(CSRNodeGroup::new(idx, NODE_GROUP_SIZE));
+            self.fwd_groups.push(CSRNodeGroup::new(idx, NODE_GROUP_SIZE));
         }
     }
 
     fn ensure_bwd_group(&mut self, group_idx: usize) {
         while self.bwd_groups.len() <= group_idx {
             let idx = self.bwd_groups.len() as u32;
-            self.bwd_groups
-                .push(CSRNodeGroup::new(idx, NODE_GROUP_SIZE));
+            self.bwd_groups.push(CSRNodeGroup::new(idx, NODE_GROUP_SIZE));
         }
     }
 }

@@ -23,6 +23,14 @@ pub enum Statement {
         args: Vec<Expr>,
         yields: Vec<String>,
     },
+    /// BEGIN [TRANSACTION]
+    Begin,
+    /// COMMIT [TRANSACTION]
+    Commit,
+    /// ROLLBACK [TRANSACTION]
+    Rollback,
+    /// EXPLAIN <query> — show execution plan without running
+    Explain(Box<Statement>),
 }
 
 // ── Query Statement ─────────────────────────────────────────────
@@ -110,9 +118,9 @@ pub struct RelPattern {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Direction {
-    Right,  // -[]->
-    Left,   // <-[]-
-    Both,   // -[]-
+    Right, // -[]->
+    Left,  // <-[]-
+    Both,  // -[]-
 }
 
 // ── WHERE ───────────────────────────────────────────────────────
@@ -308,36 +316,19 @@ pub enum Expr {
     /// Parameter reference: $name
     Param(String),
     /// Binary operation.
-    BinaryOp {
-        left: Box<Expr>,
-        op: BinOp,
-        right: Box<Expr>,
-    },
+    BinaryOp { left: Box<Expr>, op: BinOp, right: Box<Expr> },
     /// Unary operation (-expr, NOT expr).
-    UnaryOp {
-        op: UnaryOp,
-        expr: Box<Expr>,
-    },
+    UnaryOp { op: UnaryOp, expr: Box<Expr> },
     /// IS NULL / IS NOT NULL.
-    IsNull {
-        expr: Box<Expr>,
-        negated: bool,
-    },
+    IsNull { expr: Box<Expr>, negated: bool },
     /// Function call: name(DISTINCT? args...).
-    FunctionCall {
-        name: String,
-        distinct: bool,
-        args: Vec<Expr>,
-    },
+    FunctionCall { name: String, distinct: bool, args: Vec<Expr> },
     /// Star expression (*) — used in RETURN * or count(*).
     Star,
     /// List literal: [expr, expr, ...]
     ListLit(Vec<Expr>),
     /// CAST(expr AS type)
-    Cast {
-        expr: Box<Expr>,
-        target_type: DataType,
-    },
+    Cast { expr: Box<Expr>, target_type: DataType },
     /// CASE expression (searched and simple forms).
     /// - Searched: `CASE WHEN cond THEN result [ELSE default] END`
     /// - Simple:   `CASE operand WHEN value THEN result [ELSE default] END`
@@ -347,11 +338,7 @@ pub enum Expr {
         else_result: Option<Box<Expr>>,
     },
     /// IN list expression: expr [NOT] IN [list]
-    In {
-        expr: Box<Expr>,
-        list: Box<Expr>,
-        negated: bool,
-    },
+    In { expr: Box<Expr>, list: Box<Expr>, negated: bool },
     /// EXISTS { subquery } — evaluates to true if the subquery returns at least one row.
     Exists(Box<QueryStatement>),
     /// List comprehension: [variable IN list WHERE filter | map_expr]

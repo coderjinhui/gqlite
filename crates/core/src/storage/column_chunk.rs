@@ -107,12 +107,10 @@ impl ColumnChunk {
             }
             DataType::InternalId => {
                 let offset = idx * 12;
-                let table_id = u32::from_le_bytes(
-                    self.buffer[offset..offset + 4].try_into().unwrap(),
-                );
-                let row_offset = u64::from_le_bytes(
-                    self.buffer[offset + 4..offset + 12].try_into().unwrap(),
-                );
+                let table_id =
+                    u32::from_le_bytes(self.buffer[offset..offset + 4].try_into().unwrap());
+                let row_offset =
+                    u64::from_le_bytes(self.buffer[offset + 4..offset + 12].try_into().unwrap());
                 Value::InternalId(InternalId::new(table_id, row_offset))
             }
             DataType::String => {
@@ -178,10 +176,8 @@ impl ColumnChunk {
             }
             (DataType::InternalId, Value::InternalId(id)) => {
                 let offset = idx * 12;
-                self.buffer[offset..offset + 4]
-                    .copy_from_slice(&id.table_id.to_le_bytes());
-                self.buffer[offset + 4..offset + 12]
-                    .copy_from_slice(&id.offset.to_le_bytes());
+                self.buffer[offset..offset + 4].copy_from_slice(&id.table_id.to_le_bytes());
+                self.buffer[offset + 4..offset + 12].copy_from_slice(&id.offset.to_le_bytes());
             }
             (DataType::String, Value::String(s)) => {
                 if let Some(ref mut strings) = self.strings {
@@ -240,32 +236,23 @@ impl ColumnChunk {
     }
 
     /// Write this ColumnChunk to the pager and return metadata.
-    pub fn flush_to_disk(
-        &self,
-        pager: &mut Pager,
-    ) -> Result<ColumnChunkMetadata, GqliteError> {
+    pub fn flush_to_disk(&self, pager: &mut Pager) -> Result<ColumnChunkMetadata, GqliteError> {
         let page_size = pager.page_size() as usize;
-        let mut meta = ColumnChunkMetadata {
-            num_values: self.num_values,
-            ..Default::default()
-        };
+        let mut meta = ColumnChunkMetadata { num_values: self.num_values, ..Default::default() };
 
         // Write data buffer (for fixed-size types)
         if self.data_type != DataType::String && !self.buffer.is_empty() {
             let data_bytes = &self.buffer[..self.used_buffer_bytes()];
 
             // Try bit-packing compression for Int64/Serial columns
-            if matches!(self.data_type, DataType::Int64 | DataType::Serial)
-                && self.num_values > 0
-            {
+            if matches!(self.data_type, DataType::Int64 | DataType::Serial) && self.num_values > 0 {
                 let values = self.extract_non_null_int64_values();
                 if !values.is_empty() {
                     let compressed_size = compression::compressed_size_int64(&values);
                     if compressed_size < data_bytes.len() {
                         // Compression saves space — use it
                         let compressed = compression::compress_int64(&values);
-                        meta.data_pages =
-                            write_bytes_to_pages(pager, &compressed, page_size)?;
+                        meta.data_pages = write_bytes_to_pages(pager, &compressed, page_size)?;
                         meta.compressed = true;
                         meta.compressed_len = compressed.len() as u64;
                     } else {
@@ -287,7 +274,7 @@ impl ColumnChunk {
 
         // Write null bitmap
         let null_bytes = self.null_mask.as_raw_slice();
-        let used_null_bytes = (self.num_values as usize + 7) / 8;
+        let used_null_bytes = (self.num_values as usize).div_ceil(8);
         if used_null_bytes > 0 {
             meta.null_bitmap_pages =
                 write_bytes_to_pages(pager, &null_bytes[..used_null_bytes], page_size)?;
@@ -310,17 +297,11 @@ impl ColumnChunk {
         let buf_len = byte_size * capacity as usize;
 
         let mut buffer = vec![0u8; buf_len];
-        let mut strings = if data_type == DataType::String {
-            Some(Vec::new())
-        } else {
-            None
-        };
+        let mut strings = if data_type == DataType::String { Some(Vec::new()) } else { None };
 
         // Load data buffer
         if data_type != DataType::String && !meta.data_pages.is_empty() {
-            if meta.compressed
-                && matches!(data_type, DataType::Int64 | DataType::Serial)
-            {
+            if meta.compressed && matches!(data_type, DataType::Int64 | DataType::Serial) {
                 // Compressed Int64 — read compressed bytes and decompress
                 let compressed_bytes = read_bytes_from_pages(
                     pager,
@@ -335,8 +316,7 @@ impl ColumnChunk {
                 }
             } else {
                 let used = byte_size * num_values as usize;
-                let data_bytes =
-                    read_bytes_from_pages(pager, &meta.data_pages, used, page_size)?;
+                let data_bytes = read_bytes_from_pages(pager, &meta.data_pages, used, page_size)?;
                 buffer[..data_bytes.len()].copy_from_slice(&data_bytes);
             }
         }
@@ -351,7 +331,7 @@ impl ColumnChunk {
         }
 
         // Load null bitmap
-        let used_null_bytes = (num_values as usize + 7) / 8;
+        let used_null_bytes = (num_values as usize).div_ceil(8);
         let mut null_mask = bitvec![u8, Lsb0; 0; capacity as usize];
         if !meta.null_bitmap_pages.is_empty() && used_null_bytes > 0 {
             let null_bytes =
@@ -360,14 +340,7 @@ impl ColumnChunk {
             raw[..null_bytes.len()].copy_from_slice(&null_bytes);
         }
 
-        Ok(Self {
-            data_type,
-            buffer,
-            strings,
-            null_mask,
-            num_values,
-            capacity,
-        })
+        Ok(Self { data_type, buffer, strings, null_mask, num_values, capacity })
     }
 
     /// Number of buffer bytes actually used.
@@ -397,16 +370,27 @@ fn write_bytes_to_pages(
     data: &[u8],
     page_size: usize,
 ) -> Result<Vec<PageId>, GqliteError> {
+    use super::format::{write_page_header, PageType, PAGE_HEADER_SIZE};
+
+    let is_v2 = pager.header().version >= 2;
+    let usable = if is_v2 { page_size - PAGE_HEADER_SIZE } else { page_size };
+
     let mut pages = Vec::new();
     let mut offset = 0;
     while offset < data.len() {
         let page_id = pager.allocate_page()?;
-        let end = std::cmp::min(offset + page_size, data.len());
+        let end = std::cmp::min(offset + usable, data.len());
         let mut page_buf = vec![0u8; page_size];
-        page_buf[..end - offset].copy_from_slice(&data[offset..end]);
+        if is_v2 {
+            page_buf[PAGE_HEADER_SIZE..PAGE_HEADER_SIZE + (end - offset)]
+                .copy_from_slice(&data[offset..end]);
+            write_page_header(&mut page_buf, PageType::ColumnData);
+        } else {
+            page_buf[..end - offset].copy_from_slice(&data[offset..end]);
+        }
         pager.write_page(page_id, &page_buf)?;
         pages.push(page_id);
-        offset += page_size;
+        offset += usable;
     }
     Ok(pages)
 }
@@ -417,13 +401,22 @@ fn read_bytes_from_pages(
     total_bytes: usize,
     page_size: usize,
 ) -> Result<Vec<u8>, GqliteError> {
+    use super::format::{verify_page_header, PAGE_HEADER_SIZE};
+
+    let is_v2 = pager.header().version >= 2;
+    let header_offset = if is_v2 { PAGE_HEADER_SIZE } else { 0 };
+    let usable = page_size - header_offset;
+
     let mut result = Vec::with_capacity(total_bytes);
     for &page_id in page_ids {
         let mut buf = vec![0u8; page_size];
         pager.read_page(page_id, &mut buf)?;
+        if is_v2 {
+            verify_page_header(&buf, page_id)?;
+        }
         let remaining = total_bytes - result.len();
-        let take = std::cmp::min(page_size, remaining);
-        result.extend_from_slice(&buf[..take]);
+        let take = std::cmp::min(usable, remaining);
+        result.extend_from_slice(&buf[header_offset..header_offset + take]);
         if result.len() >= total_bytes {
             break;
         }
@@ -436,11 +429,20 @@ fn read_full_pages(
     page_ids: &[PageId],
     page_size: usize,
 ) -> Result<Vec<u8>, GqliteError> {
-    let mut result = Vec::with_capacity(page_ids.len() * page_size);
+    use super::format::{verify_page_header, PAGE_HEADER_SIZE};
+
+    let is_v2 = pager.header().version >= 2;
+    let header_offset = if is_v2 { PAGE_HEADER_SIZE } else { 0 };
+    let usable = page_size - header_offset;
+
+    let mut result = Vec::with_capacity(page_ids.len() * usable);
     for &page_id in page_ids {
         let mut buf = vec![0u8; page_size];
         pager.read_page(page_id, &mut buf)?;
-        result.extend_from_slice(&buf);
+        if is_v2 {
+            verify_page_header(&buf, page_id)?;
+        }
+        result.extend_from_slice(&buf[header_offset..header_offset + usable]);
     }
     Ok(result)
 }

@@ -1,15 +1,12 @@
-use gqlite_core::Database;
 use gqlite_core::types::value::Value;
+use gqlite_core::Database;
 
 #[test]
 fn list_comprehension_map_only() {
     let db = Database::in_memory();
-    db.execute("CREATE NODE TABLE N(id INT64, PRIMARY KEY(id))")
-        .unwrap();
+    db.execute("CREATE NODE TABLE N(id INT64, PRIMARY KEY(id))").unwrap();
     db.execute("CREATE (n:N {id: 1})").unwrap();
-    let result = db
-        .query("MATCH (n:N) RETURN [x IN [1, 2, 3] | x * 2] AS doubled")
-        .unwrap();
+    let result = db.query("MATCH (n:N) RETURN [x IN [1, 2, 3] | x * 2] AS doubled").unwrap();
     assert_eq!(result.num_rows(), 1);
     let val = &result.rows()[0].values[0];
     match val {
@@ -26,12 +23,9 @@ fn list_comprehension_map_only() {
 #[test]
 fn list_comprehension_filter_only() {
     let db = Database::in_memory();
-    db.execute("CREATE NODE TABLE N(id INT64, PRIMARY KEY(id))")
-        .unwrap();
+    db.execute("CREATE NODE TABLE N(id INT64, PRIMARY KEY(id))").unwrap();
     db.execute("CREATE (n:N {id: 1})").unwrap();
-    let result = db
-        .query("MATCH (n:N) RETURN [x IN [1, 2, 3, 4, 5] WHERE x > 3] AS big")
-        .unwrap();
+    let result = db.query("MATCH (n:N) RETURN [x IN [1, 2, 3, 4, 5] WHERE x > 3] AS big").unwrap();
     assert_eq!(result.num_rows(), 1);
     let val = &result.rows()[0].values[0];
     match val {
@@ -47,12 +41,10 @@ fn list_comprehension_filter_only() {
 #[test]
 fn list_comprehension_filter_and_map() {
     let db = Database::in_memory();
-    db.execute("CREATE NODE TABLE N(id INT64, PRIMARY KEY(id))")
-        .unwrap();
+    db.execute("CREATE NODE TABLE N(id INT64, PRIMARY KEY(id))").unwrap();
     db.execute("CREATE (n:N {id: 1})").unwrap();
-    let result = db
-        .query("MATCH (n:N) RETURN [x IN [1, 2, 3, 4, 5] WHERE x > 2 | x * 10] AS r")
-        .unwrap();
+    let result =
+        db.query("MATCH (n:N) RETURN [x IN [1, 2, 3, 4, 5] WHERE x > 2 | x * 10] AS r").unwrap();
     assert_eq!(result.num_rows(), 1);
     let val = &result.rows()[0].values[0];
     match val {
@@ -69,13 +61,10 @@ fn list_comprehension_filter_and_map() {
 #[test]
 fn list_comprehension_identity() {
     let db = Database::in_memory();
-    db.execute("CREATE NODE TABLE N(id INT64, PRIMARY KEY(id))")
-        .unwrap();
+    db.execute("CREATE NODE TABLE N(id INT64, PRIMARY KEY(id))").unwrap();
     db.execute("CREATE (n:N {id: 1})").unwrap();
     // No filter, no map — identity
-    let result = db
-        .query("MATCH (n:N) RETURN [x IN [10, 20, 30]] AS r")
-        .unwrap();
+    let result = db.query("MATCH (n:N) RETURN [x IN [10, 20, 30]] AS r").unwrap();
     let val = &result.rows()[0].values[0];
     match val {
         Value::List(items) => {
@@ -92,12 +81,9 @@ fn list_comprehension_identity() {
 fn list_comprehension_with_property() {
     // Use a list comprehension that references a node property
     let db = Database::in_memory();
-    db.execute("CREATE NODE TABLE N(id INT64, val INT64, PRIMARY KEY(id))")
-        .unwrap();
+    db.execute("CREATE NODE TABLE N(id INT64, val INT64, PRIMARY KEY(id))").unwrap();
     db.execute("CREATE (n:N {id: 1, val: 10})").unwrap();
-    let result = db
-        .query("MATCH (n:N) RETURN [x IN [1, 2, 3] | x + n.val] AS r")
-        .unwrap();
+    let result = db.query("MATCH (n:N) RETURN [x IN [1, 2, 3] | x + n.val] AS r").unwrap();
     assert_eq!(result.num_rows(), 1);
     let val = &result.rows()[0].values[0];
     match val {
@@ -114,12 +100,9 @@ fn list_comprehension_with_property() {
 #[test]
 fn list_comprehension_null_list() {
     let db = Database::in_memory();
-    db.execute("CREATE NODE TABLE N(id INT64, PRIMARY KEY(id))")
-        .unwrap();
+    db.execute("CREATE NODE TABLE N(id INT64, PRIMARY KEY(id))").unwrap();
     db.execute("CREATE (n:N {id: 1})").unwrap();
-    let result = db
-        .query("MATCH (n:N) RETURN [x IN null | x * 2] AS r")
-        .unwrap();
+    let result = db.query("MATCH (n:N) RETURN [x IN null | x * 2] AS r").unwrap();
     assert_eq!(result.num_rows(), 1);
     let val = &result.rows()[0].values[0];
     assert_eq!(*val, Value::Null);
@@ -128,12 +111,9 @@ fn list_comprehension_null_list() {
 #[test]
 fn list_comprehension_empty_list() {
     let db = Database::in_memory();
-    db.execute("CREATE NODE TABLE N(id INT64, PRIMARY KEY(id))")
-        .unwrap();
+    db.execute("CREATE NODE TABLE N(id INT64, PRIMARY KEY(id))").unwrap();
     db.execute("CREATE (n:N {id: 1})").unwrap();
-    let result = db
-        .query("MATCH (n:N) RETURN [x IN [] | x * 2] AS r")
-        .unwrap();
+    let result = db.query("MATCH (n:N) RETURN [x IN [] | x * 2] AS r").unwrap();
     assert_eq!(result.num_rows(), 1);
     let val = &result.rows()[0].values[0];
     match val {

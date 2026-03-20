@@ -43,10 +43,7 @@ impl CSRNodeGroup {
     pub fn new(group_idx: u32, node_count: usize) -> Self {
         Self {
             group_idx,
-            header: CSRHeader {
-                offsets: vec![0; node_count],
-                lengths: vec![0; node_count],
-            },
+            header: CSRHeader { offsets: vec![0; node_count], lengths: vec![0; node_count] },
             neighbor_ids: Vec::new(),
             rel_ids: Vec::new(),
             pending_inserts: Vec::new(),
@@ -56,11 +53,7 @@ impl CSRNodeGroup {
 
     /// Build a CSR from a list of (src_offset, dst_offset, rel_id) tuples.
     /// All src_offset values must be < node_count.
-    pub fn build_from_edges(
-        group_idx: u32,
-        edges: &[(u64, u64, u64)],
-        node_count: usize,
-    ) -> Self {
+    pub fn build_from_edges(group_idx: u32, edges: &[(u64, u64, u64)], node_count: usize) -> Self {
         // Count edges per source node
         let mut counts = vec![0u64; node_count];
         for &(src, _, _) in edges {
@@ -94,10 +87,7 @@ impl CSRNodeGroup {
 
         Self {
             group_idx,
-            header: CSRHeader {
-                offsets,
-                lengths: counts,
-            },
+            header: CSRHeader { offsets, lengths: counts },
             neighbor_ids,
             rel_ids,
             pending_inserts: Vec::new(),
@@ -165,16 +155,12 @@ impl CSRNodeGroup {
         }
 
         // Ensure we cover any new nodes from pending
-        let max_src = all_edges
-            .iter()
-            .map(|(s, _, _)| *s as usize + 1)
-            .max()
-            .unwrap_or(self.node_count);
+        let max_src =
+            all_edges.iter().map(|(s, _, _)| *s as usize + 1).max().unwrap_or(self.node_count);
         let new_node_count = std::cmp::max(self.node_count, max_src);
 
         // Rebuild
-        let rebuilt =
-            Self::build_from_edges(self.group_idx, &all_edges, new_node_count);
+        let rebuilt = Self::build_from_edges(self.group_idx, &all_edges, new_node_count);
         self.header = rebuilt.header;
         self.neighbor_ids = rebuilt.neighbor_ids;
         self.rel_ids = rebuilt.rel_ids;

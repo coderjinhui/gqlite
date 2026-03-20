@@ -21,11 +21,7 @@ impl Procedure for DegreeCentrality {
     }
 
     fn output_columns(&self) -> Vec<String> {
-        vec![
-            "node_id".to_string(),
-            "out_degree".to_string(),
-            "in_degree".to_string(),
-        ]
+        vec!["node_id".to_string(), "out_degree".to_string(), "in_degree".to_string()]
     }
 
     fn execute(
@@ -57,10 +53,7 @@ impl Procedure for DegreeCentrality {
 
         // Get the RelTable from storage
         let rel_table = storage.rel_tables.get(&rel_table_id).ok_or_else(|| {
-            GqliteError::Execution(format!(
-                "relation table '{}' not found in storage",
-                rel_name
-            ))
+            GqliteError::Execution(format!("relation table '{}' not found in storage", rel_name))
         })?;
 
         // Collect all node offsets from both source and destination node tables.
@@ -106,11 +99,7 @@ impl Procedure for DegreeCentrality {
         let rows: Vec<ProcedureRow> = entries
             .into_iter()
             .map(|((_tid, offset), (out_deg, in_deg))| {
-                vec![
-                    Value::Int(offset as i64),
-                    Value::Int(out_deg),
-                    Value::Int(in_deg),
-                ]
+                vec![Value::Int(offset as i64), Value::Int(out_deg), Value::Int(in_deg)]
             })
             .collect();
 
@@ -128,10 +117,7 @@ struct UnionFind {
 
 impl UnionFind {
     fn new(n: usize) -> Self {
-        UnionFind {
-            parent: (0..n).collect(),
-            rank: vec![0; n],
-        }
+        UnionFind { parent: (0..n).collect(), rank: vec![0; n] }
     }
 
     fn find(&mut self, mut x: usize) -> usize {
@@ -210,10 +196,7 @@ impl Procedure for Wcc {
 
         // Get the RelTable from storage
         let rel_table = storage.rel_tables.get(&rel_table_id).ok_or_else(|| {
-            GqliteError::Execution(format!(
-                "relation table '{}' not found in storage",
-                rel_name
-            ))
+            GqliteError::Execution(format!("relation table '{}' not found in storage", rel_name))
         })?;
 
         // Collect all node offsets. Key: (table_id, offset), mapped to a
@@ -225,11 +208,11 @@ impl Procedure for Wcc {
         let mut add_nodes = |table_id: u32, offsets: Vec<u64>| {
             for offset in offsets {
                 let key = (table_id, offset);
-                if !node_index.contains_key(&key) {
+                node_index.entry(key).or_insert_with(|| {
                     let idx = node_list.len();
                     node_list.push(key);
-                    node_index.insert(key, idx);
-                }
+                    idx
+                });
             }
         };
 
@@ -281,9 +264,7 @@ impl Procedure for Wcc {
 
         let result: Vec<ProcedureRow> = rows
             .into_iter()
-            .map(|(_tid, offset, comp_id)| {
-                vec![Value::Int(offset as i64), Value::Int(comp_id)]
-            })
+            .map(|(_tid, offset, comp_id)| vec![Value::Int(offset as i64), Value::Int(comp_id)])
             .collect();
 
         Ok(result)
@@ -360,10 +341,7 @@ impl Procedure for Dijkstra {
 
         // Get the RelTable from storage
         let rel_table = storage.rel_tables.get(&rel_table_id).ok_or_else(|| {
-            GqliteError::Execution(format!(
-                "relation table '{}' not found in storage",
-                rel_name
-            ))
+            GqliteError::Execution(format!("relation table '{}' not found in storage", rel_name))
         })?;
 
         // Get source node table for PK lookup
@@ -373,17 +351,11 @@ impl Procedure for Dijkstra {
 
         // Resolve source and target node offsets from primary key values
         let source_offset = src_node_table.lookup_pk(source_pk).ok_or_else(|| {
-            GqliteError::Execution(format!(
-                "dijkstra: source node with id {} not found",
-                source_pk
-            ))
+            GqliteError::Execution(format!("dijkstra: source node with id {} not found", source_pk))
         })?;
 
         let target_offset = src_node_table.lookup_pk(target_pk).ok_or_else(|| {
-            GqliteError::Execution(format!(
-                "dijkstra: target node with id {} not found",
-                target_pk
-            ))
+            GqliteError::Execution(format!("dijkstra: target node with id {} not found", target_pk))
         })?;
 
         // Dijkstra's algorithm using a min-heap
@@ -455,10 +427,8 @@ impl Procedure for Dijkstra {
         path_offsets.reverse();
 
         // Convert offsets back to PK values for user-friendly output
-        let pk_idx = catalog
-            .get_node_table_by_id(src_table_id)
-            .map(|e| e.primary_key_idx)
-            .unwrap_or(0);
+        let pk_idx =
+            catalog.get_node_table_by_id(src_table_id).map(|e| e.primary_key_idx).unwrap_or(0);
 
         let path_values: Vec<Value> = path_offsets
             .iter()
@@ -471,10 +441,7 @@ impl Procedure for Dijkstra {
             })
             .collect();
 
-        Ok(vec![vec![
-            Value::List(path_values),
-            Value::Float(total_cost),
-        ]])
+        Ok(vec![vec![Value::List(path_values), Value::Float(total_cost)]])
     }
 }
 
@@ -527,10 +494,7 @@ impl Procedure for PageRank {
 
         // Get the RelTable from storage
         let rel_table = storage.rel_tables.get(&rel_table_id).ok_or_else(|| {
-            GqliteError::Execution(format!(
-                "relation table '{}' not found in storage",
-                rel_name
-            ))
+            GqliteError::Execution(format!("relation table '{}' not found in storage", rel_name))
         })?;
 
         // Collect all node offsets into a contiguous index.
@@ -541,11 +505,11 @@ impl Procedure for PageRank {
         let mut add_nodes = |table_id: u32, offsets: Vec<u64>| {
             for offset in offsets {
                 let key = (table_id, offset);
-                if !node_index.contains_key(&key) {
+                node_index.entry(key).or_insert_with(|| {
                     let idx = node_list.len();
                     node_list.push(key);
-                    node_index.insert(key, idx);
-                }
+                    idx
+                });
             }
         };
 
@@ -593,10 +557,8 @@ impl Procedure for PageRank {
         for _ in 0..max_iter {
             // Sum up scores of dangling nodes (nodes with no outgoing edges).
             // Their rank is redistributed uniformly to all nodes.
-            let dangling_sum: f64 = (0..n)
-                .filter(|&idx| out_neighbors[idx].is_empty())
-                .map(|idx| scores[idx])
-                .sum();
+            let dangling_sum: f64 =
+                (0..n).filter(|&idx| out_neighbors[idx].is_empty()).map(|idx| scores[idx]).sum();
 
             let mut new_scores = vec![((1.0 - d) + d * dangling_sum) / n as f64; n];
 
@@ -709,10 +671,7 @@ impl Procedure for LabelPropagation {
 
         // Get the RelTable from storage
         let rel_table = storage.rel_tables.get(&rel_table_id).ok_or_else(|| {
-            GqliteError::Execution(format!(
-                "relation table '{}' not found in storage",
-                rel_name
-            ))
+            GqliteError::Execution(format!("relation table '{}' not found in storage", rel_name))
         })?;
 
         // Collect all node offsets into a contiguous index.
@@ -723,11 +682,11 @@ impl Procedure for LabelPropagation {
         let mut add_nodes = |table_id: u32, offsets: Vec<u64>| {
             for offset in offsets {
                 let key = (table_id, offset);
-                if !node_index.contains_key(&key) {
+                node_index.entry(key).or_insert_with(|| {
                     let idx = node_list.len();
                     node_list.push(key);
-                    node_index.insert(key, idx);
-                }
+                    idx
+                });
             }
         };
 
@@ -839,9 +798,7 @@ impl Procedure for LabelPropagation {
 
         let rows: Vec<ProcedureRow> = entries
             .into_iter()
-            .map(|(_tid, offset, community)| {
-                vec![Value::Int(offset as i64), Value::Int(community)]
-            })
+            .map(|(_tid, offset, community)| vec![Value::Int(offset as i64), Value::Int(community)])
             .collect();
 
         Ok(rows)
@@ -899,10 +856,7 @@ impl Procedure for TriangleCount {
 
         // Get the RelTable from storage
         let rel_table = storage.rel_tables.get(&rel_table_id).ok_or_else(|| {
-            GqliteError::Execution(format!(
-                "relation table '{}' not found in storage",
-                rel_name
-            ))
+            GqliteError::Execution(format!("relation table '{}' not found in storage", rel_name))
         })?;
 
         // Collect all node offsets into a contiguous index.
@@ -913,11 +867,11 @@ impl Procedure for TriangleCount {
         let mut add_nodes = |table_id: u32, offsets: Vec<u64>| {
             for offset in offsets {
                 let key = (table_id, offset);
-                if !node_index.contains_key(&key) {
+                node_index.entry(key).or_insert_with(|| {
                     let idx = node_list.len();
                     node_list.push(key);
-                    node_index.insert(key, idx);
-                }
+                    idx
+                });
             }
         };
 
@@ -1021,9 +975,7 @@ impl Procedure for TriangleCount {
 
         let rows: Vec<ProcedureRow> = entries
             .into_iter()
-            .map(|(_tid, offset, tri_count)| {
-                vec![Value::Int(offset as i64), Value::Int(tri_count)]
-            })
+            .map(|(_tid, offset, tri_count)| vec![Value::Int(offset as i64), Value::Int(tri_count)])
             .collect();
 
         Ok(rows)
@@ -1079,10 +1031,7 @@ impl Procedure for Betweenness {
 
         // Get the RelTable from storage
         let rel_table = storage.rel_tables.get(&rel_table_id).ok_or_else(|| {
-            GqliteError::Execution(format!(
-                "relation table '{}' not found in storage",
-                rel_name
-            ))
+            GqliteError::Execution(format!("relation table '{}' not found in storage", rel_name))
         })?;
 
         // Collect all node offsets into a contiguous index.
@@ -1092,11 +1041,11 @@ impl Procedure for Betweenness {
         let mut add_nodes = |table_id: u32, offsets: Vec<u64>| {
             for offset in offsets {
                 let key = (table_id, offset);
-                if !node_index.contains_key(&key) {
+                node_index.entry(key).or_insert_with(|| {
                     let idx = node_list.len();
                     node_list.push(key);
-                    node_index.insert(key, idx);
-                }
+                    idx
+                });
             }
         };
 
@@ -1210,9 +1159,7 @@ impl Procedure for Betweenness {
 
         let rows: Vec<ProcedureRow> = entries
             .into_iter()
-            .map(|(_tid, offset, score)| {
-                vec![Value::Int(offset as i64), Value::Float(score)]
-            })
+            .map(|(_tid, offset, score)| vec![Value::Int(offset as i64), Value::Float(score)])
             .collect();
 
         Ok(rows)
