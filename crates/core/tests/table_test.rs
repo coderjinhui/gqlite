@@ -50,13 +50,8 @@ fn knows_entry() -> RelTableEntry {
 #[test]
 fn insert_and_read() {
     let mut table = NodeTable::new(&person_entry());
-    let id = table
-        .insert(&[
-            Value::Int(1),
-            Value::String("Alice".into()),
-            Value::Int(30),
-        ], 1)
-        .unwrap();
+    let id =
+        table.insert(&[Value::Int(1), Value::String("Alice".into()), Value::Int(30)], 1).unwrap();
     assert_eq!(id, InternalId::new(0, 0));
 
     let row = table.read(0).unwrap();
@@ -68,9 +63,7 @@ fn insert_and_read() {
 #[test]
 fn duplicate_pk() {
     let mut table = NodeTable::new(&person_entry());
-    table
-        .insert(&[Value::Int(1), Value::String("A".into()), Value::Int(20)], 1)
-        .unwrap();
+    table.insert(&[Value::Int(1), Value::String("A".into()), Value::Int(20)], 1).unwrap();
     let result = table.insert(&[Value::Int(1), Value::String("B".into()), Value::Int(25)], 1);
     assert!(result.is_err());
 }
@@ -80,11 +73,7 @@ fn scan_all() {
     let mut table = NodeTable::new(&person_entry());
     for i in 0..5 {
         table
-            .insert(&[
-                Value::Int(i),
-                Value::String(format!("p{}", i)),
-                Value::Int(20 + i),
-            ], 1)
+            .insert(&[Value::Int(i), Value::String(format!("p{}", i)), Value::Int(20 + i)], 1)
             .unwrap();
     }
 
@@ -97,12 +86,8 @@ fn scan_all() {
 #[test]
 fn delete_row() {
     let mut table = NodeTable::new(&person_entry());
-    table
-        .insert(&[Value::Int(1), Value::String("A".into()), Value::Int(20)], 1)
-        .unwrap();
-    table
-        .insert(&[Value::Int(2), Value::String("B".into()), Value::Int(25)], 1)
-        .unwrap();
+    table.insert(&[Value::Int(1), Value::String("A".into()), Value::Int(20)], 1).unwrap();
+    table.insert(&[Value::Int(2), Value::String("B".into()), Value::Int(25)], 1).unwrap();
 
     table.delete(0, 2).unwrap();
 
@@ -119,11 +104,9 @@ fn delete_row() {
 #[test]
 fn update_column() {
     let mut table = NodeTable::new(&person_entry());
-    table
-        .insert(&[Value::Int(1), Value::String("A".into()), Value::Int(20)], 1)
-        .unwrap();
+    table.insert(&[Value::Int(1), Value::String("A".into()), Value::Int(20)], 1).unwrap();
 
-    table.update(0, 1, Value::String("Updated".into())).unwrap();
+    table.update(0, 1, Value::String("Updated".into()), 2).unwrap();
     let row = table.read(0).unwrap();
     assert_eq!(row[1], Value::String("Updated".into()));
 }
@@ -131,9 +114,7 @@ fn update_column() {
 #[test]
 fn pk_lookup() {
     let mut table = NodeTable::new(&person_entry());
-    table
-        .insert(&[Value::Int(42), Value::String("X".into()), Value::Int(99)], 1)
-        .unwrap();
+    table.insert(&[Value::Int(42), Value::String("X".into()), Value::Int(99)], 1).unwrap();
     assert_eq!(table.lookup_pk(&Value::Int(42)), Some(0));
     assert_eq!(table.lookup_pk(&Value::Int(99)), None);
 }
@@ -166,12 +147,9 @@ fn multiple_edges() {
     let mut rel = RelTable::new(&knows_entry());
 
     // 0→1, 0→2, 1→2
-    rel.insert_rel(InternalId::new(0, 0), InternalId::new(0, 1), &[])
-        .unwrap();
-    rel.insert_rel(InternalId::new(0, 0), InternalId::new(0, 2), &[])
-        .unwrap();
-    rel.insert_rel(InternalId::new(0, 1), InternalId::new(0, 2), &[])
-        .unwrap();
+    rel.insert_rel(InternalId::new(0, 0), InternalId::new(0, 1), &[]).unwrap();
+    rel.insert_rel(InternalId::new(0, 0), InternalId::new(0, 2), &[]).unwrap();
+    rel.insert_rel(InternalId::new(0, 1), InternalId::new(0, 2), &[]).unwrap();
 
     rel.compact();
 
@@ -258,11 +236,11 @@ fn mvcc_is_visible() {
     table.insert(&[Value::Int(1), Value::String("A".into()), Value::Int(20)], 5).unwrap();
 
     assert!(!table.is_visible(0, 4)); // create_ts=5 > 4
-    assert!(table.is_visible(0, 5));  // create_ts=5 <= 5
+    assert!(table.is_visible(0, 5)); // create_ts=5 <= 5
     assert!(table.is_visible(0, 10)); // create_ts=5 <= 10
 
     table.delete(0, 8).unwrap();
-    assert!(table.is_visible(0, 7));   // delete_ts=8 > 7
-    assert!(!table.is_visible(0, 8));  // delete_ts=8 is NOT > 8
+    assert!(table.is_visible(0, 7)); // delete_ts=8 > 7
+    assert!(!table.is_visible(0, 8)); // delete_ts=8 is NOT > 8
     assert!(!table.is_visible(0, 10)); // delete_ts=8 <= 10
 }

@@ -2,14 +2,10 @@ use gqlite_core::Database;
 
 fn setup() -> Database {
     let db = Database::in_memory();
-    db.execute("CREATE NODE TABLE Person(id INT64, name STRING, PRIMARY KEY(id))")
-        .unwrap();
-    db.execute("CREATE NODE TABLE City(id INT64, name STRING, PRIMARY KEY(id))")
-        .unwrap();
-    db.execute("CREATE REL TABLE LIVES_IN(FROM Person TO City)")
-        .unwrap();
-    db.execute("CREATE REL TABLE WORKS_IN(FROM Person TO City)")
-        .unwrap();
+    db.execute("CREATE NODE TABLE Person(id INT64, name STRING, PRIMARY KEY(id))").unwrap();
+    db.execute("CREATE NODE TABLE City(id INT64, name STRING, PRIMARY KEY(id))").unwrap();
+    db.execute("CREATE REL TABLE LIVES_IN(FROM Person TO City)").unwrap();
+    db.execute("CREATE REL TABLE WORKS_IN(FROM Person TO City)").unwrap();
     db.execute("CREATE (p:Person {id: 1, name: 'Alice'})").unwrap();
     db.execute("CREATE (p:Person {id: 2, name: 'Bob'})").unwrap();
     db.execute("CREATE (c:City {id: 1, name: 'NYC'})").unwrap();
@@ -36,9 +32,7 @@ fn exists_basic() {
 fn not_exists() {
     let db = setup();
     let result = db
-        .query(
-            "MATCH (p:Person) WHERE NOT EXISTS { MATCH (p)-[:LIVES_IN]->(:City) } RETURN p.name",
-        )
+        .query("MATCH (p:Person) WHERE NOT EXISTS { MATCH (p)-[:LIVES_IN]->(:City) } RETURN p.name")
         .unwrap();
     assert_eq!(result.num_rows(), 1);
     assert_eq!(result.rows()[0].get_string(0).unwrap(), "Bob");
@@ -49,9 +43,7 @@ fn exists_with_no_matches() {
     let db = setup();
     // Nobody has WORKS_IN relationships, so EXISTS should return false for all
     let result = db
-        .query(
-            "MATCH (p:Person) WHERE EXISTS { MATCH (p)-[:WORKS_IN]->(:City) } RETURN p.name",
-        )
+        .query("MATCH (p:Person) WHERE EXISTS { MATCH (p)-[:WORKS_IN]->(:City) } RETURN p.name")
         .unwrap();
     assert_eq!(result.num_rows(), 0);
 }

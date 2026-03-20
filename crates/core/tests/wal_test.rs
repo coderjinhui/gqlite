@@ -2,12 +2,12 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use gqlite_core::catalog::Catalog;
-use gqlite_core::Storage;
 use gqlite_core::transaction::wal::{
     replay_wal, wal_path_for, WalPayload, WalReader, WalRecord, WalWriter, WAL_HEADER_SIZE,
 };
 use gqlite_core::types::data_type::DataType;
 use gqlite_core::types::value::Value;
+use gqlite_core::Storage;
 
 fn temp_wal(name: &str) -> PathBuf {
     let dir = std::env::temp_dir().join("gqlite_wal_test");
@@ -31,10 +31,7 @@ fn write_and_read_records() {
             txn_id: 1,
             payload: WalPayload::CreateNodeTable {
                 name: "Person".into(),
-                columns: vec![
-                    ("id".into(), DataType::Int64),
-                    ("name".into(), DataType::String),
-                ],
+                columns: vec![("id".into(), DataType::Int64), ("name".into(), DataType::String)],
                 primary_key: "id".into(),
             },
         })
@@ -48,11 +45,7 @@ fn write_and_read_records() {
             },
         })
         .unwrap();
-        w.append(&WalRecord {
-            txn_id: 1,
-            payload: WalPayload::TxnCommit,
-        })
-        .unwrap();
+        w.append(&WalRecord { txn_id: 1, payload: WalPayload::TxnCommit }).unwrap();
     }
 
     // Read
@@ -60,10 +53,7 @@ fn write_and_read_records() {
     let records = reader.read_all().unwrap();
     assert_eq!(records.len(), 3);
     assert_eq!(records[0].txn_id, 1);
-    assert!(matches!(
-        records[0].payload,
-        WalPayload::CreateNodeTable { .. }
-    ));
+    assert!(matches!(records[0].payload, WalPayload::CreateNodeTable { .. }));
     assert!(matches!(records[2].payload, WalPayload::TxnCommit));
 
     cleanup(&path);
@@ -76,11 +66,7 @@ fn crc32_detects_corruption() {
 
     {
         let mut w = WalWriter::create(&path).unwrap();
-        w.append(&WalRecord {
-            txn_id: 1,
-            payload: WalPayload::TxnCommit,
-        })
-        .unwrap();
+        w.append(&WalRecord { txn_id: 1, payload: WalPayload::TxnCommit }).unwrap();
     }
 
     // Corrupt the file: flip a byte in the data area
@@ -119,11 +105,7 @@ fn replay_committed_only() {
             },
         })
         .unwrap();
-        w.append(&WalRecord {
-            txn_id: 1,
-            payload: WalPayload::TxnCommit,
-        })
-        .unwrap();
+        w.append(&WalRecord { txn_id: 1, payload: WalPayload::TxnCommit }).unwrap();
 
         // Txn 2: NOT committed (simulating crash)
         w.append(&WalRecord {
@@ -165,19 +147,12 @@ fn replay_insert_and_delete() {
             txn_id: 1,
             payload: WalPayload::CreateNodeTable {
                 name: "Person".into(),
-                columns: vec![
-                    ("id".into(), DataType::Int64),
-                    ("name".into(), DataType::String),
-                ],
+                columns: vec![("id".into(), DataType::Int64), ("name".into(), DataType::String)],
                 primary_key: "id".into(),
             },
         })
         .unwrap();
-        w.append(&WalRecord {
-            txn_id: 1,
-            payload: WalPayload::TxnCommit,
-        })
-        .unwrap();
+        w.append(&WalRecord { txn_id: 1, payload: WalPayload::TxnCommit }).unwrap();
 
         // Insert two rows
         w.append(&WalRecord {
@@ -198,26 +173,15 @@ fn replay_insert_and_delete() {
             },
         })
         .unwrap();
-        w.append(&WalRecord {
-            txn_id: 2,
-            payload: WalPayload::TxnCommit,
-        })
-        .unwrap();
+        w.append(&WalRecord { txn_id: 2, payload: WalPayload::TxnCommit }).unwrap();
 
         // Delete first row
         w.append(&WalRecord {
             txn_id: 3,
-            payload: WalPayload::DeleteNode {
-                table_id: 0,
-                node_offset: 0,
-            },
+            payload: WalPayload::DeleteNode { table_id: 0, node_offset: 0 },
         })
         .unwrap();
-        w.append(&WalRecord {
-            txn_id: 3,
-            payload: WalPayload::TxnCommit,
-        })
-        .unwrap();
+        w.append(&WalRecord { txn_id: 3, payload: WalPayload::TxnCommit }).unwrap();
     }
 
     let mut reader = WalReader::open(&path).unwrap();
@@ -242,11 +206,7 @@ fn clear_wal() {
     cleanup(&path);
 
     let mut w = WalWriter::create(&path).unwrap();
-    w.append(&WalRecord {
-        txn_id: 1,
-        payload: WalPayload::TxnCommit,
-    })
-    .unwrap();
+    w.append(&WalRecord { txn_id: 1, payload: WalPayload::TxnCommit }).unwrap();
 
     // File should be larger than header
     let size_before = fs::metadata(&path).unwrap().len();

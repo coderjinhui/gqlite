@@ -20,11 +20,7 @@ pub struct Pager {
 impl Pager {
     /// Create a new `.graph` file at `path`, writing the initial header.
     pub fn create(path: &Path) -> Result<Self, GqliteError> {
-        let mut file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create_new(true)
-            .open(path)?;
+        let mut file = OpenOptions::new().read(true).write(true).create_new(true).open(path)?;
 
         let header = FileHeader::new();
 

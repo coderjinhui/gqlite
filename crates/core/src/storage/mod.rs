@@ -6,3 +6,4 @@ pub mod format;
 pub mod node_group;
 pub mod pager;
 pub mod table;
+pub mod upgrader;

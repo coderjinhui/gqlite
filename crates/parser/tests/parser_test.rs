@@ -82,10 +82,7 @@ fn expr_function_call() {
     let Clause::Return(ret) = &q.clauses[0] else {
         panic!();
     };
-    let Expr::FunctionCall {
-        name, distinct, ..
-    } = &ret.items[0].expr
-    else {
+    let Expr::FunctionCall { name, distinct, .. } = &ret.items[0].expr else {
         panic!();
     };
     assert_eq!(name, "count");
@@ -188,8 +185,7 @@ fn match_undirected() {
 
 #[test]
 fn match_multiple_patterns() {
-    let stmt =
-        parse("MATCH (a)-[:KNOWS]->(b), (b)-[:LIVES_IN]->(c) RETURN a, b, c");
+    let stmt = parse("MATCH (a)-[:KNOWS]->(b), (b)-[:LIVES_IN]->(c) RETURN a, b, c");
     let Statement::Query(q) = stmt else {
         panic!();
     };
@@ -304,9 +300,8 @@ fn detach_delete() {
 
 #[test]
 fn create_node_table() {
-    let stmt = parse(
-        "CREATE NODE TABLE Person (id INT64, name STRING, age INT64, PRIMARY KEY (id))",
-    );
+    let stmt =
+        parse("CREATE NODE TABLE Person (id INT64, name STRING, age INT64, PRIMARY KEY (id))");
     let Statement::CreateNodeTable(t) = stmt else {
         panic!("expected CreateNodeTable, got {:?}", stmt);
     };
@@ -353,9 +348,8 @@ fn create_rel_table_no_props() {
 
 #[test]
 fn full_query_pipeline() {
-    let stmt = parse(
-        "MATCH (a:Person) WHERE a.age > 30 RETURN a.name AS name ORDER BY a.name LIMIT 10",
-    );
+    let stmt =
+        parse("MATCH (a:Person) WHERE a.age > 30 RETURN a.name AS name ORDER BY a.name LIMIT 10");
     let Statement::Query(q) = stmt else {
         panic!();
     };
@@ -417,7 +411,8 @@ fn merge_basic() {
 
 #[test]
 fn merge_with_on_create_and_on_match() {
-    let stmt = parse("MERGE (n:Person {name: 'Alice'}) ON CREATE SET n.age = 30 ON MATCH SET n.age = 31");
+    let stmt =
+        parse("MERGE (n:Person {name: 'Alice'}) ON CREATE SET n.age = 30 ON MATCH SET n.age = 31");
     let Statement::Query(q) = stmt else { panic!() };
     let Clause::Merge(m) = &q.clauses[0] else { panic!() };
     assert_eq!(m.on_create.len(), 1);
@@ -438,9 +433,7 @@ fn var_length_path() {
     let stmt = parse("MATCH (a:Person)-[:KNOWS*1..3]->(b:Person) RETURN b");
     let Statement::Query(q) = stmt else { panic!() };
     let Clause::Match(m) = &q.clauses[0] else { panic!() };
-    let PatternElement::Rel(r) = &m.pattern.paths[0].elements[1] else {
-        panic!()
-    };
+    let PatternElement::Rel(r) = &m.pattern.paths[0].elements[1] else { panic!() };
     assert_eq!(r.var_length, Some((1, 3)));
     assert_eq!(r.direction, Direction::Right);
 }
@@ -450,9 +443,7 @@ fn var_length_star_only() {
     let stmt = parse("MATCH (a)-[*]->(b) RETURN b");
     let Statement::Query(q) = stmt else { panic!() };
     let Clause::Match(m) = &q.clauses[0] else { panic!() };
-    let PatternElement::Rel(r) = &m.pattern.paths[0].elements[1] else {
-        panic!()
-    };
+    let PatternElement::Rel(r) = &m.pattern.paths[0].elements[1] else { panic!() };
     assert_eq!(r.var_length, Some((1, u32::MAX)));
 }
 
@@ -461,9 +452,7 @@ fn var_length_max_only() {
     let stmt = parse("MATCH (a)-[:KNOWS*..5]->(b) RETURN b");
     let Statement::Query(q) = stmt else { panic!() };
     let Clause::Match(m) = &q.clauses[0] else { panic!() };
-    let PatternElement::Rel(r) = &m.pattern.paths[0].elements[1] else {
-        panic!()
-    };
+    let PatternElement::Rel(r) = &m.pattern.paths[0].elements[1] else { panic!() };
     assert_eq!(r.var_length, Some((1, 5)));
 }
 
@@ -472,9 +461,7 @@ fn var_length_exact() {
     let stmt = parse("MATCH (a)-[*2]->(b) RETURN b");
     let Statement::Query(q) = stmt else { panic!() };
     let Clause::Match(m) = &q.clauses[0] else { panic!() };
-    let PatternElement::Rel(r) = &m.pattern.paths[0].elements[1] else {
-        panic!()
-    };
+    let PatternElement::Rel(r) = &m.pattern.paths[0].elements[1] else { panic!() };
     assert_eq!(r.var_length, Some((2, 2)));
 }
 
@@ -482,13 +469,10 @@ fn var_length_exact() {
 
 #[test]
 fn shortest_path_basic() {
-    let stmt = parse(
-        "MATCH (a:Person), (b:Person), p = shortestPath((a)-[:KNOWS*..10]->(b)) RETURN p",
-    );
+    let stmt =
+        parse("MATCH (a:Person), (b:Person), p = shortestPath((a)-[:KNOWS*..10]->(b)) RETURN p");
     let Statement::Query(q) = stmt else { panic!() };
-    let Clause::Match(m) = &q.clauses[0] else {
-        panic!()
-    };
+    let Clause::Match(m) = &q.clauses[0] else { panic!() };
     // Two regular path patterns (a:Person) and (b:Person)
     assert_eq!(m.pattern.paths.len(), 2);
     // One shortest-path pattern
@@ -498,31 +482,22 @@ fn shortest_path_basic() {
     assert!(!sp.all_paths);
     // Inner pattern: (a)-[:KNOWS*..10]->(b)
     assert_eq!(sp.pattern.elements.len(), 3);
-    let PatternElement::Node(src) = &sp.pattern.elements[0] else {
-        panic!()
-    };
+    let PatternElement::Node(src) = &sp.pattern.elements[0] else { panic!() };
     assert_eq!(src.alias.as_deref(), Some("a"));
-    let PatternElement::Rel(rel) = &sp.pattern.elements[1] else {
-        panic!()
-    };
+    let PatternElement::Rel(rel) = &sp.pattern.elements[1] else { panic!() };
     assert_eq!(rel.label.as_deref(), Some("KNOWS"));
     assert_eq!(rel.var_length, Some((1, 10)));
     assert_eq!(rel.direction, Direction::Right);
-    let PatternElement::Node(dst) = &sp.pattern.elements[2] else {
-        panic!()
-    };
+    let PatternElement::Node(dst) = &sp.pattern.elements[2] else { panic!() };
     assert_eq!(dst.alias.as_deref(), Some("b"));
 }
 
 #[test]
 fn all_shortest_paths_parse() {
-    let stmt = parse(
-        "MATCH (a:Person), (b:Person), p = allShortestPaths((a)-[:KNOWS*..5]->(b)) RETURN p",
-    );
+    let stmt =
+        parse("MATCH (a:Person), (b:Person), p = allShortestPaths((a)-[:KNOWS*..5]->(b)) RETURN p");
     let Statement::Query(q) = stmt else { panic!() };
-    let Clause::Match(m) = &q.clauses[0] else {
-        panic!()
-    };
+    let Clause::Match(m) = &q.clauses[0] else { panic!() };
     assert_eq!(m.pattern.shortest_paths.len(), 1);
     let sp = &m.pattern.shortest_paths[0];
     assert_eq!(sp.path_variable, "p");
@@ -533,9 +508,8 @@ fn all_shortest_paths_parse() {
 
 #[test]
 fn exists_subquery_parse() {
-    let stmt = parse(
-        "MATCH (p:Person) WHERE EXISTS { MATCH (p)-[:KNOWS]->(:Person) } RETURN p.name",
-    );
+    let stmt =
+        parse("MATCH (p:Person) WHERE EXISTS { MATCH (p)-[:KNOWS]->(:Person) } RETURN p.name");
     let Statement::Query(q) = stmt else { panic!() };
     // Clause 0: MATCH, Clause 1: WHERE, Clause 2: RETURN
     let Clause::Where(w) = &q.clauses[1] else {
@@ -555,19 +529,15 @@ fn exists_subquery_parse() {
 
 #[test]
 fn not_exists_subquery_parse() {
-    let stmt = parse(
-        "MATCH (p:Person) WHERE NOT EXISTS { MATCH (p)-[:KNOWS]->(:Person) } RETURN p.name",
-    );
+    let stmt =
+        parse("MATCH (p:Person) WHERE NOT EXISTS { MATCH (p)-[:KNOWS]->(:Person) } RETURN p.name");
     let Statement::Query(q) = stmt else { panic!() };
     let Clause::Where(w) = &q.clauses[1] else {
         panic!("expected WHERE clause");
     };
     // NOT EXISTS is parsed as UnaryOp(Not, Exists(...))
     match &w.expr {
-        Expr::UnaryOp {
-            op: UnaryOp::Not,
-            expr: inner,
-        } => match inner.as_ref() {
+        Expr::UnaryOp { op: UnaryOp::Not, expr: inner } => match inner.as_ref() {
             Expr::Exists(query) => {
                 assert!(!query.clauses.is_empty());
             }
@@ -651,7 +621,9 @@ fn call_subquery_basic() {
 
 #[test]
 fn call_subquery_with_preceding_match() {
-    let stmt = parse("MATCH (a:Person) CALL { MATCH (b:Person) RETURN count(b) AS total } RETURN a.name, total");
+    let stmt = parse(
+        "MATCH (a:Person) CALL { MATCH (b:Person) RETURN count(b) AS total } RETURN a.name, total",
+    );
     let Statement::Query(q) = stmt else {
         panic!("expected query");
     };
@@ -682,8 +654,9 @@ fn parse_all_single_statement() {
 fn parse_all_multiple_statements() {
     let stmts = Parser::parse_all(
         "CREATE NODE TABLE A(id INT64, PRIMARY KEY(id)); \
-         CREATE NODE TABLE B(id INT64, PRIMARY KEY(id));"
-    ).unwrap();
+         CREATE NODE TABLE B(id INT64, PRIMARY KEY(id));",
+    )
+    .unwrap();
     assert_eq!(stmts.len(), 2);
 }
 
@@ -692,8 +665,9 @@ fn parse_all_mixed_ddl_and_dml() {
     let stmts = Parser::parse_all(
         "CREATE NODE TABLE N(id INT64, PRIMARY KEY(id)); \
          CREATE (n:N {id: 1}); \
-         MATCH (n:N) RETURN n.id;"
-    ).unwrap();
+         MATCH (n:N) RETURN n.id;",
+    )
+    .unwrap();
     assert_eq!(stmts.len(), 3);
 }
 
@@ -701,8 +675,9 @@ fn parse_all_mixed_ddl_and_dml() {
 fn parse_all_no_trailing_semicolon() {
     let stmts = Parser::parse_all(
         "CREATE NODE TABLE A(id INT64, PRIMARY KEY(id)); \
-         MATCH (n) RETURN n"
-    ).unwrap();
+         MATCH (n) RETURN n",
+    )
+    .unwrap();
     assert_eq!(stmts.len(), 2);
 }
 
@@ -724,3 +699,57 @@ fn parse_all_only_semicolons() {
     assert_eq!(stmts.len(), 0);
 }
 
+// ── Transaction control statements ──────────────────────────
+
+#[test]
+fn parse_begin() {
+    let stmt = parse("BEGIN");
+    assert!(matches!(stmt, Statement::Begin));
+}
+
+#[test]
+fn parse_begin_transaction() {
+    let stmt = parse("BEGIN TRANSACTION");
+    assert!(matches!(stmt, Statement::Begin));
+}
+
+#[test]
+fn parse_commit() {
+    let stmt = parse("COMMIT");
+    assert!(matches!(stmt, Statement::Commit));
+}
+
+#[test]
+fn parse_commit_transaction() {
+    let stmt = parse("COMMIT TRANSACTION");
+    assert!(matches!(stmt, Statement::Commit));
+}
+
+#[test]
+fn parse_rollback() {
+    let stmt = parse("ROLLBACK");
+    assert!(matches!(stmt, Statement::Rollback));
+}
+
+#[test]
+fn parse_rollback_transaction() {
+    let stmt = parse("ROLLBACK TRANSACTION");
+    assert!(matches!(stmt, Statement::Rollback));
+}
+
+#[test]
+fn parse_begin_case_insensitive() {
+    let stmt = parse("begin");
+    assert!(matches!(stmt, Statement::Begin));
+    let stmt = parse("Begin");
+    assert!(matches!(stmt, Statement::Begin));
+}
+
+#[test]
+fn parse_all_with_transaction_stmts() {
+    let stmts = Parser::parse_all("BEGIN; CREATE (n:A {id: 1}); COMMIT;").unwrap();
+    assert_eq!(stmts.len(), 3);
+    assert!(matches!(stmts[0], Statement::Begin));
+    assert!(matches!(stmts[1], Statement::Query(_)));
+    assert!(matches!(stmts[2], Statement::Commit));
+}

@@ -25,7 +25,7 @@ pub fn compress_int64(values: &[i64]) -> Vec<u8> {
     let bit_width = if range == 0 { 0 } else { 64 - range.leading_zeros() } as u8;
 
     let count = values.len() as u32;
-    let packed_bytes = ((count as usize) * (bit_width as usize) + 7) / 8;
+    let packed_bytes = ((count as usize) * (bit_width as usize)).div_ceil(8);
 
     let mut buf = encode_header(min, bit_width, count);
     buf.resize(buf.len() + packed_bytes, 0);
@@ -83,7 +83,7 @@ pub fn compressed_size_int64(values: &[i64]) -> usize {
     let max = *values.iter().max().unwrap();
     let range = (max as u128).wrapping_sub(min as u128) as u64;
     let bit_width = if range == 0 { 0 } else { 64 - range.leading_zeros() } as u8;
-    let packed_bytes = ((values.len()) * (bit_width as usize) + 7) / 8;
+    let packed_bytes = ((values.len()) * (bit_width as usize)).div_ceil(8);
 
     13 + packed_bytes
 }

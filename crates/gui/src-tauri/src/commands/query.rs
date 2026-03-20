@@ -29,9 +29,7 @@ pub fn value_to_json(v: &Value) -> serde_json::Value {
         Value::String(s) => serde_json::json!(s),
         Value::Bytes(b) => serde_json::json!(format!("<bytes:{}>", b.len())),
         Value::InternalId(id) => serde_json::json!(format!("{}:{}", id.table_id, id.offset)),
-        Value::List(items) => {
-            serde_json::Value::Array(items.iter().map(value_to_json).collect())
-        }
+        Value::List(items) => serde_json::Value::Array(items.iter().map(value_to_json).collect()),
         Value::Date(d) => serde_json::json!(d.to_string()),
         Value::DateTime(dt) => serde_json::json!(dt.to_string()),
         Value::Duration(ms) => serde_json::json!(format!("{}ms", ms)),
@@ -50,24 +48,13 @@ pub fn execute_query(query: String, state: State<AppState>) -> Result<QueryRespo
     let columns: Vec<ColumnDesc> = result
         .columns
         .iter()
-        .map(|c| ColumnDesc {
-            name: c.name.clone(),
-            data_type: format!("{:?}", c.data_type),
-        })
+        .map(|c| ColumnDesc { name: c.name.clone(), data_type: format!("{:?}", c.data_type) })
         .collect();
 
-    let rows: Vec<Vec<serde_json::Value>> = result
-        .rows()
-        .iter()
-        .map(|row| row.values.iter().map(value_to_json).collect())
-        .collect();
+    let rows: Vec<Vec<serde_json::Value>> =
+        result.rows().iter().map(|row| row.values.iter().map(value_to_json).collect()).collect();
 
     let row_count = rows.len();
 
-    Ok(QueryResponse {
-        columns,
-        rows,
-        row_count,
-        elapsed_ms,
-    })
+    Ok(QueryResponse { columns, rows, row_count, elapsed_ms })
 }

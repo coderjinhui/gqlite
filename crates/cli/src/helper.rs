@@ -1,34 +1,75 @@
 use rustyline::completion::{Completer, Pair};
+use rustyline::highlight::Highlighter;
 use rustyline::hint::Hinter;
 use rustyline::Context;
-use rustyline::highlight::Highlighter;
 use rustyline::{Helper, Validator};
 use std::borrow::Cow;
 
-const DOT_COMMANDS: &[&str] = &[
-    ".checkpoint", ".database", ".exit", ".help", ".open", ".quit", ".schema", ".tables",
-];
+const DOT_COMMANDS: &[&str] =
+    &[".checkpoint", ".database", ".exit", ".help", ".open", ".quit", ".schema", ".tables"];
 
 const CYPHER_KEYWORDS: &[&str] = &[
-    "ADD", "ALL", "ALTER", "AND", "AS", "ASC",
-    "BEGIN", "BOOL", "BY",
-    "CALL", "CASE", "CAST", "COLUMN", "COMMIT", "COPY", "CREATE",
-    "DELETE", "DELIMITER", "DESC", "DETACH", "DISTINCT", "DOUBLE", "DROP",
-    "ELSE", "END", "EXISTS",
-    "FALSE", "FROM",
+    "ADD",
+    "ALL",
+    "ALTER",
+    "AND",
+    "AS",
+    "ASC",
+    "BEGIN",
+    "BOOL",
+    "BY",
+    "CALL",
+    "CASE",
+    "CAST",
+    "COLUMN",
+    "COMMIT",
+    "COPY",
+    "CREATE",
+    "DELETE",
+    "DELIMITER",
+    "DESC",
+    "DETACH",
+    "DISTINCT",
+    "DOUBLE",
+    "DROP",
+    "ELSE",
+    "END",
+    "EXISTS",
+    "FALSE",
+    "FROM",
     "HEADER",
-    "IN", "INT64", "IS",
+    "IN",
+    "INT64",
+    "IS",
     "KEY",
     "LIMIT",
-    "MATCH", "MERGE",
-    "NODE", "NOT", "NULL",
-    "ON", "OPTIONAL", "OR", "ORDER",
+    "MATCH",
+    "MERGE",
+    "NODE",
+    "NOT",
+    "NULL",
+    "ON",
+    "OPTIONAL",
+    "OR",
+    "ORDER",
     "PRIMARY",
-    "REL", "RENAME", "RETURN", "ROLLBACK",
-    "SERIAL", "SET", "SKIP", "STRING",
-    "TABLE", "THEN", "TO", "TRUE",
-    "UNION", "UNWIND",
-    "WHEN", "WHERE", "WITH",
+    "REL",
+    "RENAME",
+    "RETURN",
+    "ROLLBACK",
+    "SERIAL",
+    "SET",
+    "SKIP",
+    "STRING",
+    "TABLE",
+    "THEN",
+    "TO",
+    "TRUE",
+    "UNION",
+    "UNWIND",
+    "WHEN",
+    "WHERE",
+    "WITH",
     "YIELD",
 ];
 
@@ -57,10 +98,8 @@ impl GqliteHelper {
         }
 
         // Find the start of the current word
-        let word_start = text
-            .rfind(|c: char| !c.is_alphanumeric() && c != '_')
-            .map(|i| i + 1)
-            .unwrap_or(0);
+        let word_start =
+            text.rfind(|c: char| !c.is_alphanumeric() && c != '_').map(|i| i + 1).unwrap_or(0);
 
         let word = &text[word_start..];
         if word.is_empty() {
@@ -81,12 +120,17 @@ impl GqliteHelper {
 impl Completer for GqliteHelper {
     type Candidate = Pair;
 
-    fn complete(&self, line: &str, pos: usize, _ctx: &Context<'_>) -> rustyline::Result<(usize, Vec<Pair>)> {
+    fn complete(
+        &self,
+        line: &str,
+        pos: usize,
+        _ctx: &Context<'_>,
+    ) -> rustyline::Result<(usize, Vec<Pair>)> {
         let (start, matches) = Self::find_matches(line, pos);
-        let pairs = matches.into_iter().map(|m| Pair {
-            display: m.clone(),
-            replacement: m[pos - start..].to_string(),
-        }).collect();
+        let pairs = matches
+            .into_iter()
+            .map(|m| Pair { display: m.clone(), replacement: m[pos - start..].to_string() })
+            .collect();
         Ok((pos, pairs))
     }
 }
@@ -95,7 +139,9 @@ impl Hinter for GqliteHelper {
     type Hint = String;
 
     fn hint(&self, line: &str, pos: usize, _ctx: &Context<'_>) -> Option<String> {
-        if pos < line.len() { return None; }
+        if pos < line.len() {
+            return None;
+        }
         let (start, matches) = Self::find_matches(line, pos);
         matches.first().map(|m| m[pos - start..].to_string())
     }

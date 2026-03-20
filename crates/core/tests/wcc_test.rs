@@ -3,20 +3,15 @@ use gqlite_core::Database;
 #[test]
 fn wcc_single_component() {
     let db = Database::in_memory();
-    db.execute("CREATE NODE TABLE N(id INT64, PRIMARY KEY(id))")
-        .unwrap();
+    db.execute("CREATE NODE TABLE N(id INT64, PRIMARY KEY(id))").unwrap();
     db.execute("CREATE REL TABLE E(FROM N TO N)").unwrap();
     db.execute("CREATE (n:N {id: 1})").unwrap();
     db.execute("CREATE (n:N {id: 2})").unwrap();
     db.execute("CREATE (n:N {id: 3})").unwrap();
-    db.execute("MATCH (a:N), (b:N) WHERE a.id = 1 AND b.id = 2 CREATE (a)-[:E]->(b)")
-        .unwrap();
-    db.execute("MATCH (a:N), (b:N) WHERE a.id = 2 AND b.id = 3 CREATE (a)-[:E]->(b)")
-        .unwrap();
+    db.execute("MATCH (a:N), (b:N) WHERE a.id = 1 AND b.id = 2 CREATE (a)-[:E]->(b)").unwrap();
+    db.execute("MATCH (a:N), (b:N) WHERE a.id = 2 AND b.id = 3 CREATE (a)-[:E]->(b)").unwrap();
 
-    let result = db
-        .query("CALL wcc('E') YIELD node_id, component_id")
-        .unwrap();
+    let result = db.query("CALL wcc('E') YIELD node_id, component_id").unwrap();
     assert_eq!(result.num_rows(), 3);
 
     // All nodes should be in the same component
@@ -28,23 +23,17 @@ fn wcc_single_component() {
 #[test]
 fn wcc_multiple_components() {
     let db = Database::in_memory();
-    db.execute("CREATE NODE TABLE N(id INT64, PRIMARY KEY(id))")
-        .unwrap();
+    db.execute("CREATE NODE TABLE N(id INT64, PRIMARY KEY(id))").unwrap();
     db.execute("CREATE REL TABLE E(FROM N TO N)").unwrap();
     for i in 1..=4 {
-        db.execute(&format!("CREATE (n:N {{id: {}}})", i))
-            .unwrap();
+        db.execute(&format!("CREATE (n:N {{id: {}}})", i)).unwrap();
     }
     // Component 1: nodes 1-2
-    db.execute("MATCH (a:N), (b:N) WHERE a.id = 1 AND b.id = 2 CREATE (a)-[:E]->(b)")
-        .unwrap();
+    db.execute("MATCH (a:N), (b:N) WHERE a.id = 1 AND b.id = 2 CREATE (a)-[:E]->(b)").unwrap();
     // Component 2: nodes 3-4
-    db.execute("MATCH (a:N), (b:N) WHERE a.id = 3 AND b.id = 4 CREATE (a)-[:E]->(b)")
-        .unwrap();
+    db.execute("MATCH (a:N), (b:N) WHERE a.id = 3 AND b.id = 4 CREATE (a)-[:E]->(b)").unwrap();
 
-    let result = db
-        .query("CALL wcc('E') YIELD node_id, component_id")
-        .unwrap();
+    let result = db.query("CALL wcc('E') YIELD node_id, component_id").unwrap();
     assert_eq!(result.num_rows(), 4);
 
     let rows = result.rows();
@@ -63,16 +52,13 @@ fn wcc_multiple_components() {
 #[test]
 fn wcc_isolated_nodes() {
     let db = Database::in_memory();
-    db.execute("CREATE NODE TABLE N(id INT64, PRIMARY KEY(id))")
-        .unwrap();
+    db.execute("CREATE NODE TABLE N(id INT64, PRIMARY KEY(id))").unwrap();
     db.execute("CREATE REL TABLE E(FROM N TO N)").unwrap();
     db.execute("CREATE (n:N {id: 1})").unwrap();
     db.execute("CREATE (n:N {id: 2})").unwrap();
     // No edges — each node is its own component
 
-    let result = db
-        .query("CALL wcc('E') YIELD node_id, component_id")
-        .unwrap();
+    let result = db.query("CALL wcc('E') YIELD node_id, component_id").unwrap();
     assert_eq!(result.num_rows(), 2);
 
     let c0 = result.rows()[0].get_int(1).unwrap();
@@ -99,15 +85,12 @@ fn wcc_no_args_errors() {
 #[test]
 fn wcc_yield_subset() {
     let db = Database::in_memory();
-    db.execute("CREATE NODE TABLE N(id INT64, PRIMARY KEY(id))")
-        .unwrap();
+    db.execute("CREATE NODE TABLE N(id INT64, PRIMARY KEY(id))").unwrap();
     db.execute("CREATE REL TABLE E(FROM N TO N)").unwrap();
     db.execute("CREATE (n:N {id: 1})").unwrap();
 
     // Only yield component_id
-    let result = db
-        .query("CALL wcc('E') YIELD component_id")
-        .unwrap();
+    let result = db.query("CALL wcc('E') YIELD component_id").unwrap();
     assert_eq!(result.column_names(), vec!["component_id"]);
     assert_eq!(result.num_rows(), 1);
 }
@@ -116,12 +99,10 @@ fn wcc_yield_subset() {
 fn wcc_chain_graph() {
     // Chain: 1->2->3->4->5 — all should be one component
     let db = Database::in_memory();
-    db.execute("CREATE NODE TABLE N(id INT64, PRIMARY KEY(id))")
-        .unwrap();
+    db.execute("CREATE NODE TABLE N(id INT64, PRIMARY KEY(id))").unwrap();
     db.execute("CREATE REL TABLE E(FROM N TO N)").unwrap();
     for i in 1..=5 {
-        db.execute(&format!("CREATE (n:N {{id: {}}})", i))
-            .unwrap();
+        db.execute(&format!("CREATE (n:N {{id: {}}})", i)).unwrap();
     }
     for i in 1..5 {
         db.execute(&format!(
@@ -132,9 +113,7 @@ fn wcc_chain_graph() {
         .unwrap();
     }
 
-    let result = db
-        .query("CALL wcc('E') YIELD node_id, component_id")
-        .unwrap();
+    let result = db.query("CALL wcc('E') YIELD node_id, component_id").unwrap();
     assert_eq!(result.num_rows(), 5);
 
     // All nodes in same component
@@ -148,26 +127,19 @@ fn wcc_chain_graph() {
 fn wcc_three_components() {
     // Three isolated groups: {1,2}, {3}, {4,5,6}
     let db = Database::in_memory();
-    db.execute("CREATE NODE TABLE N(id INT64, PRIMARY KEY(id))")
-        .unwrap();
+    db.execute("CREATE NODE TABLE N(id INT64, PRIMARY KEY(id))").unwrap();
     db.execute("CREATE REL TABLE E(FROM N TO N)").unwrap();
     for i in 1..=6 {
-        db.execute(&format!("CREATE (n:N {{id: {}}})", i))
-            .unwrap();
+        db.execute(&format!("CREATE (n:N {{id: {}}})", i)).unwrap();
     }
     // Group 1: 1-2
-    db.execute("MATCH (a:N), (b:N) WHERE a.id = 1 AND b.id = 2 CREATE (a)-[:E]->(b)")
-        .unwrap();
+    db.execute("MATCH (a:N), (b:N) WHERE a.id = 1 AND b.id = 2 CREATE (a)-[:E]->(b)").unwrap();
     // Group 2: node 3 alone (no edges)
     // Group 3: 4-5-6
-    db.execute("MATCH (a:N), (b:N) WHERE a.id = 4 AND b.id = 5 CREATE (a)-[:E]->(b)")
-        .unwrap();
-    db.execute("MATCH (a:N), (b:N) WHERE a.id = 5 AND b.id = 6 CREATE (a)-[:E]->(b)")
-        .unwrap();
+    db.execute("MATCH (a:N), (b:N) WHERE a.id = 4 AND b.id = 5 CREATE (a)-[:E]->(b)").unwrap();
+    db.execute("MATCH (a:N), (b:N) WHERE a.id = 5 AND b.id = 6 CREATE (a)-[:E]->(b)").unwrap();
 
-    let result = db
-        .query("CALL wcc('E') YIELD node_id, component_id")
-        .unwrap();
+    let result = db.query("CALL wcc('E') YIELD node_id, component_id").unwrap();
     assert_eq!(result.num_rows(), 6);
 
     let rows = result.rows();

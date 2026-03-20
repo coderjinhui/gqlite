@@ -1,8 +1,8 @@
 use serde::Serialize;
 use tauri::State;
 
-use crate::state::AppState;
 use crate::commands::query::value_to_json;
+use crate::state::AppState;
 use gqlite_core::types::value::Value;
 
 #[derive(Serialize)]
@@ -37,20 +37,15 @@ fn fetch_nodes(
     alias: &str,
 ) -> Result<Vec<GraphNode>, String> {
     let schema = db.table_schema(table_name).unwrap_or_default();
-    let prop_cols: Vec<String> = schema
-        .iter()
-        .map(|(name, _)| format!("{}.{}", alias, name))
-        .collect();
+    let prop_cols: Vec<String> =
+        schema.iter().map(|(name, _)| format!("{}.{}", alias, name)).collect();
     let return_clause = if prop_cols.is_empty() {
         alias.to_string()
     } else {
         format!("{}, {}", alias, prop_cols.join(", "))
     };
 
-    let gql = format!(
-        "MATCH ({}:{}) RETURN {} LIMIT {}",
-        alias, table_name, return_clause, limit
-    );
+    let gql = format!("MATCH ({}:{}) RETURN {} LIMIT {}", alias, table_name, return_clause, limit);
     let result = db.execute(&gql).map_err(|e| e.to_string())?;
 
     let mut nodes = Vec::new();
@@ -81,11 +76,7 @@ fn fetch_nodes(
             id_str = format!("node_{}", nodes.len());
         }
 
-        nodes.push(GraphNode {
-            id: id_str,
-            label: table_name.to_string(),
-            properties: props,
-        });
+        nodes.push(GraphNode { id: id_str, label: table_name.to_string(), properties: props });
     }
 
     Ok(nodes)
@@ -104,21 +95,19 @@ pub fn get_graph_data(
     // Get primary key column name and destination table info from catalog
     let (primary_key, dst_table_name, dst_primary_key) = {
         let catalog = db.inner.catalog.read().unwrap();
-        let pk = catalog.get_node_table(&node_table).map(|entry| {
-            entry.columns[entry.primary_key_idx].name.clone()
-        });
+        let pk = catalog
+            .get_node_table(&node_table)
+            .map(|entry| entry.columns[entry.primary_key_idx].name.clone());
 
         let (dst_name, dst_pk) = rel_table
             .as_ref()
             .and_then(|rt| {
                 catalog.get_rel_table(rt).and_then(|rel_entry| {
-                    catalog
-                        .get_node_table_by_id(rel_entry.dst_table_id)
-                        .map(|dst_entry| {
-                            let name = dst_entry.name.clone();
-                            let pk = dst_entry.columns[dst_entry.primary_key_idx].name.clone();
-                            (name, pk)
-                        })
+                    catalog.get_node_table_by_id(rel_entry.dst_table_id).map(|dst_entry| {
+                        let name = dst_entry.name.clone();
+                        let pk = dst_entry.columns[dst_entry.primary_key_idx].name.clone();
+                        (name, pk)
+                    })
                 })
             })
             .map(|(n, p)| (Some(n), Some(p)))
@@ -155,10 +144,8 @@ pub fn get_graph_data(
         }
 
         // Fetch edges: MATCH (a:Person)-[:LIVES_IN]->(b) RETURN a, b
-        let edge_gql = format!(
-            "MATCH (a:{})-[:{}]->(b) RETURN a, b LIMIT {}",
-            node_table, rt, limit
-        );
+        let edge_gql =
+            format!("MATCH (a:{})-[:{}]->(b) RETURN a, b LIMIT {}", node_table, rt, limit);
         let edge_result = db.execute(&edge_gql).map_err(|e| e.to_string())?;
 
         for row in edge_result.rows() {

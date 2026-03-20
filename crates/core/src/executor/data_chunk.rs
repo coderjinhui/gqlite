@@ -26,9 +26,11 @@ impl ValueVector {
     pub fn new(data_type: &DataType, capacity: usize) -> Self {
         match data_type {
             DataType::Bool => ValueVector::Bool(Vec::with_capacity(capacity)),
-            DataType::Int64 | DataType::Serial | DataType::Date | DataType::DateTime | DataType::Duration => {
-                ValueVector::Int64(Vec::with_capacity(capacity))
-            }
+            DataType::Int64
+            | DataType::Serial
+            | DataType::Date
+            | DataType::DateTime
+            | DataType::Duration => ValueVector::Int64(Vec::with_capacity(capacity)),
             DataType::Double => ValueVector::Double(Vec::with_capacity(capacity)),
             DataType::String => ValueVector::String(Vec::with_capacity(capacity)),
             DataType::InternalId => ValueVector::InternalId(Vec::with_capacity(capacity)),
@@ -39,14 +41,14 @@ impl ValueVector {
     pub fn with_size(data_type: &DataType, size: usize) -> Self {
         match data_type {
             DataType::Bool => ValueVector::Bool(vec![false; size]),
-            DataType::Int64 | DataType::Serial | DataType::Date | DataType::DateTime | DataType::Duration => {
-                ValueVector::Int64(vec![0; size])
-            }
+            DataType::Int64
+            | DataType::Serial
+            | DataType::Date
+            | DataType::DateTime
+            | DataType::Duration => ValueVector::Int64(vec![0; size]),
             DataType::Double => ValueVector::Double(vec![0.0; size]),
             DataType::String => ValueVector::String(vec![String::new(); size]),
-            DataType::InternalId => {
-                ValueVector::InternalId(vec![InternalId::new(0, 0); size])
-            }
+            DataType::InternalId => ValueVector::InternalId(vec![InternalId::new(0, 0); size]),
         }
     }
 
@@ -149,10 +151,8 @@ pub struct DataChunk {
 impl DataChunk {
     /// Create a new DataChunk with the given column types and capacity.
     pub fn new(types: &[DataType], capacity: usize) -> Self {
-        let vectors: Vec<ValueVector> = types
-            .iter()
-            .map(|dt| ValueVector::with_size(dt, capacity))
-            .collect();
+        let vectors: Vec<ValueVector> =
+            types.iter().map(|dt| ValueVector::with_size(dt, capacity)).collect();
         let null_masks: Vec<BitVec<u8, Lsb0>> = types
             .iter()
             .map(|_| {
@@ -161,28 +161,14 @@ impl DataChunk {
                 bv
             })
             .collect();
-        Self {
-            vectors,
-            null_masks,
-            num_rows: 0,
-            capacity,
-        }
+        Self { vectors, null_masks, num_rows: 0, capacity }
     }
 
     /// Create a DataChunk with zero capacity (to be grown via append).
     pub fn empty(types: &[DataType]) -> Self {
-        let vectors: Vec<ValueVector> = types
-            .iter()
-            .map(|dt| ValueVector::new(dt, 0))
-            .collect();
-        let null_masks: Vec<BitVec<u8, Lsb0>> =
-            types.iter().map(|_| BitVec::new()).collect();
-        Self {
-            vectors,
-            null_masks,
-            num_rows: 0,
-            capacity: 0,
-        }
+        let vectors: Vec<ValueVector> = types.iter().map(|dt| ValueVector::new(dt, 0)).collect();
+        let null_masks: Vec<BitVec<u8, Lsb0>> = types.iter().map(|_| BitVec::new()).collect();
+        Self { vectors, null_masks, num_rows: 0, capacity: 0 }
     }
 
     /// Get the value at (col, row), respecting NULL mask.
@@ -254,12 +240,13 @@ impl DataChunk {
 fn default_value(dt: &DataType) -> Value {
     match dt {
         DataType::Bool => Value::Bool(false),
-        DataType::Int64 | DataType::Serial | DataType::Date | DataType::DateTime | DataType::Duration => {
-            Value::Int(0)
-        }
+        DataType::Int64
+        | DataType::Serial
+        | DataType::Date
+        | DataType::DateTime
+        | DataType::Duration => Value::Int(0),
         DataType::Double => Value::Float(0.0),
         DataType::String => Value::String(String::new()),
         DataType::InternalId => Value::InternalId(InternalId::new(0, 0)),
     }
 }
-

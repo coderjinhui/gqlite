@@ -54,11 +54,7 @@ pub struct Catalog {
 
 impl Catalog {
     pub fn new() -> Self {
-        Self {
-            node_tables: Vec::new(),
-            rel_tables: Vec::new(),
-            next_table_id: 0,
-        }
+        Self { node_tables: Vec::new(), rel_tables: Vec::new(), next_table_id: 0 }
     }
 
     /// Create a new node table. `pk` is the name of the primary key column (must exist in `columns`).
@@ -73,19 +69,14 @@ impl Catalog {
         if self.node_tables.iter().any(|t| t.name == name)
             || self.rel_tables.iter().any(|t| t.name == name)
         {
-            return Err(GqliteError::Other(format!(
-                "table '{}' already exists",
-                name
-            )));
+            return Err(GqliteError::Other(format!("table '{}' already exists", name)));
         }
 
         // Find primary key column index
         let pk_idx = columns
             .iter()
             .position(|c| c.name == pk)
-            .ok_or_else(|| {
-                GqliteError::Other(format!("primary key column '{}' not found", pk))
-            })?;
+            .ok_or_else(|| GqliteError::Other(format!("primary key column '{}' not found", pk)))?;
 
         let table_id = self.next_table_id;
         self.next_table_id += 1;
@@ -115,29 +106,18 @@ impl Catalog {
         if self.node_tables.iter().any(|t| t.name == name)
             || self.rel_tables.iter().any(|t| t.name == name)
         {
-            return Err(GqliteError::Other(format!(
-                "table '{}' already exists",
-                name
-            )));
+            return Err(GqliteError::Other(format!("table '{}' already exists", name)));
         }
 
         // Find src and dst node tables
-        let src_id = self
-            .node_tables
-            .iter()
-            .find(|t| t.name == src)
-            .map(|t| t.table_id)
-            .ok_or_else(|| {
-                GqliteError::Other(format!("source node table '{}' not found", src))
-            })?;
-        let dst_id = self
-            .node_tables
-            .iter()
-            .find(|t| t.name == dst)
-            .map(|t| t.table_id)
-            .ok_or_else(|| {
-                GqliteError::Other(format!("destination node table '{}' not found", dst))
-            })?;
+        let src_id =
+            self.node_tables.iter().find(|t| t.name == src).map(|t| t.table_id).ok_or_else(
+                || GqliteError::Other(format!("source node table '{}' not found", src)),
+            )?;
+        let dst_id =
+            self.node_tables.iter().find(|t| t.name == dst).map(|t| t.table_id).ok_or_else(
+                || GqliteError::Other(format!("destination node table '{}' not found", dst)),
+            )?;
 
         let table_id = self.next_table_id;
         self.next_table_id += 1;
@@ -180,10 +160,7 @@ impl Catalog {
             return Ok(());
         }
 
-        Err(GqliteError::Other(format!(
-            "table '{}' not found",
-            name
-        )))
+        Err(GqliteError::Other(format!("table '{}' not found", name)))
     }
 
     pub fn get_node_table(&self, name: &str) -> Option<&NodeTableEntry> {
@@ -232,11 +209,10 @@ impl Catalog {
         table_name: &str,
         col: ColumnDef,
     ) -> Result<(), GqliteError> {
-        let entry = self
-            .node_tables
-            .iter_mut()
-            .find(|t| t.name == table_name)
-            .ok_or_else(|| GqliteError::Other(format!("node table '{}' not found", table_name)))?;
+        let entry =
+            self.node_tables.iter_mut().find(|t| t.name == table_name).ok_or_else(|| {
+                GqliteError::Other(format!("node table '{}' not found", table_name))
+            })?;
         if entry.columns.iter().any(|c| c.name == col.name) {
             return Err(GqliteError::Other(format!(
                 "column '{}' already exists in table '{}'",
@@ -253,11 +229,10 @@ impl Catalog {
         table_name: &str,
         col: ColumnDef,
     ) -> Result<(), GqliteError> {
-        let entry = self
-            .rel_tables
-            .iter_mut()
-            .find(|t| t.name == table_name)
-            .ok_or_else(|| GqliteError::Other(format!("rel table '{}' not found", table_name)))?;
+        let entry =
+            self.rel_tables.iter_mut().find(|t| t.name == table_name).ok_or_else(|| {
+                GqliteError::Other(format!("rel table '{}' not found", table_name))
+            })?;
         if entry.columns.iter().any(|c| c.name == col.name) {
             return Err(GqliteError::Other(format!(
                 "column '{}' already exists in table '{}'",
@@ -274,11 +249,10 @@ impl Catalog {
         table_name: &str,
         col_name: &str,
     ) -> Result<(), GqliteError> {
-        let entry = self
-            .node_tables
-            .iter_mut()
-            .find(|t| t.name == table_name)
-            .ok_or_else(|| GqliteError::Other(format!("node table '{}' not found", table_name)))?;
+        let entry =
+            self.node_tables.iter_mut().find(|t| t.name == table_name).ok_or_else(|| {
+                GqliteError::Other(format!("node table '{}' not found", table_name))
+            })?;
         // Can't drop the primary key column
         if entry.columns[entry.primary_key_idx].name == col_name {
             return Err(GqliteError::Other(format!(
@@ -286,16 +260,9 @@ impl Catalog {
                 col_name
             )));
         }
-        let pos = entry
-            .columns
-            .iter()
-            .position(|c| c.name == col_name)
-            .ok_or_else(|| {
-                GqliteError::Other(format!(
-                    "column '{}' not found in table '{}'",
-                    col_name, table_name
-                ))
-            })?;
+        let pos = entry.columns.iter().position(|c| c.name == col_name).ok_or_else(|| {
+            GqliteError::Other(format!("column '{}' not found in table '{}'", col_name, table_name))
+        })?;
         entry.columns.remove(pos);
         // Adjust primary_key_idx if needed
         if pos < entry.primary_key_idx {
@@ -310,39 +277,24 @@ impl Catalog {
         table_name: &str,
         col_name: &str,
     ) -> Result<(), GqliteError> {
-        let entry = self
-            .rel_tables
-            .iter_mut()
-            .find(|t| t.name == table_name)
-            .ok_or_else(|| GqliteError::Other(format!("rel table '{}' not found", table_name)))?;
-        let pos = entry
-            .columns
-            .iter()
-            .position(|c| c.name == col_name)
-            .ok_or_else(|| {
-                GqliteError::Other(format!(
-                    "column '{}' not found in table '{}'",
-                    col_name, table_name
-                ))
+        let entry =
+            self.rel_tables.iter_mut().find(|t| t.name == table_name).ok_or_else(|| {
+                GqliteError::Other(format!("rel table '{}' not found", table_name))
             })?;
+        let pos = entry.columns.iter().position(|c| c.name == col_name).ok_or_else(|| {
+            GqliteError::Other(format!("column '{}' not found in table '{}'", col_name, table_name))
+        })?;
         entry.columns.remove(pos);
         Ok(())
     }
 
     /// Rename a table (node or rel).
-    pub fn rename_table(
-        &mut self,
-        old_name: &str,
-        new_name: &str,
-    ) -> Result<(), GqliteError> {
+    pub fn rename_table(&mut self, old_name: &str, new_name: &str) -> Result<(), GqliteError> {
         // Check that new name doesn't conflict
         if self.node_tables.iter().any(|t| t.name == new_name)
             || self.rel_tables.iter().any(|t| t.name == new_name)
         {
-            return Err(GqliteError::Other(format!(
-                "table '{}' already exists",
-                new_name
-            )));
+            return Err(GqliteError::Other(format!("table '{}' already exists", new_name)));
         }
         if let Some(entry) = self.node_tables.iter_mut().find(|t| t.name == old_name) {
             entry.name = new_name.to_string();
@@ -352,10 +304,7 @@ impl Catalog {
             entry.name = new_name.to_string();
             return Ok(());
         }
-        Err(GqliteError::Other(format!(
-            "table '{}' not found",
-            old_name
-        )))
+        Err(GqliteError::Other(format!("table '{}' not found", old_name)))
     }
 
     /// Rename a column in a node table.
@@ -365,27 +314,19 @@ impl Catalog {
         old_col: &str,
         new_col: &str,
     ) -> Result<(), GqliteError> {
-        let entry = self
-            .node_tables
-            .iter_mut()
-            .find(|t| t.name == table_name)
-            .ok_or_else(|| GqliteError::Other(format!("node table '{}' not found", table_name)))?;
+        let entry =
+            self.node_tables.iter_mut().find(|t| t.name == table_name).ok_or_else(|| {
+                GqliteError::Other(format!("node table '{}' not found", table_name))
+            })?;
         if entry.columns.iter().any(|c| c.name == new_col) {
             return Err(GqliteError::Other(format!(
                 "column '{}' already exists in table '{}'",
                 new_col, table_name
             )));
         }
-        let col = entry
-            .columns
-            .iter_mut()
-            .find(|c| c.name == old_col)
-            .ok_or_else(|| {
-                GqliteError::Other(format!(
-                    "column '{}' not found in table '{}'",
-                    old_col, table_name
-                ))
-            })?;
+        let col = entry.columns.iter_mut().find(|c| c.name == old_col).ok_or_else(|| {
+            GqliteError::Other(format!("column '{}' not found in table '{}'", old_col, table_name))
+        })?;
         col.name = new_col.to_string();
         Ok(())
     }
@@ -397,27 +338,19 @@ impl Catalog {
         old_col: &str,
         new_col: &str,
     ) -> Result<(), GqliteError> {
-        let entry = self
-            .rel_tables
-            .iter_mut()
-            .find(|t| t.name == table_name)
-            .ok_or_else(|| GqliteError::Other(format!("rel table '{}' not found", table_name)))?;
+        let entry =
+            self.rel_tables.iter_mut().find(|t| t.name == table_name).ok_or_else(|| {
+                GqliteError::Other(format!("rel table '{}' not found", table_name))
+            })?;
         if entry.columns.iter().any(|c| c.name == new_col) {
             return Err(GqliteError::Other(format!(
                 "column '{}' already exists in table '{}'",
                 new_col, table_name
             )));
         }
-        let col = entry
-            .columns
-            .iter_mut()
-            .find(|c| c.name == old_col)
-            .ok_or_else(|| {
-                GqliteError::Other(format!(
-                    "column '{}' not found in table '{}'",
-                    old_col, table_name
-                ))
-            })?;
+        let col = entry.columns.iter_mut().find(|c| c.name == old_col).ok_or_else(|| {
+            GqliteError::Other(format!("column '{}' not found in table '{}'", old_col, table_name))
+        })?;
         col.name = new_col.to_string();
         Ok(())
     }
@@ -440,14 +373,23 @@ impl Catalog {
     ///
     /// Format: first 8 bytes = total length (u64 LE), then the bincode payload.
     /// If the data exceeds one page, it spans consecutive pages.
+    ///
+    /// v1 format: raw pages (no page header).
+    /// v2 format: each page has an 8-byte header (page_type + checksum).
     pub fn save_to(
         &self,
         pager: &mut crate::storage::pager::Pager,
         start_page: crate::storage::pager::PageId,
     ) -> Result<(), GqliteError> {
+        use crate::storage::format::{write_page_header, PageType, PAGE_HEADER_SIZE};
+
         let payload = self.to_bytes()?;
         let total_len = payload.len() as u64;
         let page_size = pager.page_size() as usize;
+        let is_v2 = pager.header().version >= 2;
+
+        // In v2 format, each page has an 8-byte header, so less payload per page
+        let usable_per_page = if is_v2 { page_size - PAGE_HEADER_SIZE } else { page_size };
 
         // Build the full byte stream: 8-byte length prefix + payload
         let mut stream = Vec::with_capacity(8 + payload.len());
@@ -455,7 +397,7 @@ impl Catalog {
         stream.extend_from_slice(&payload);
 
         // Calculate how many pages we need
-        let pages_needed = (stream.len() + page_size - 1) / page_size;
+        let pages_needed = stream.len().div_ceil(usable_per_page);
 
         // Ensure we have enough pages allocated
         while pager.page_count() < start_page + pages_needed as u64 {
@@ -465,11 +407,20 @@ impl Catalog {
         // Write page by page
         for i in 0..pages_needed {
             let page_id = start_page + i as u64;
-            let start = i * page_size;
-            let end = std::cmp::min(start + page_size, stream.len());
+            let start = i * usable_per_page;
+            let end = std::cmp::min(start + usable_per_page, stream.len());
 
             let mut page_buf = vec![0u8; page_size];
-            page_buf[..end - start].copy_from_slice(&stream[start..end]);
+            if is_v2 {
+                // v2: payload starts after page header
+                page_buf[PAGE_HEADER_SIZE..PAGE_HEADER_SIZE + (end - start)]
+                    .copy_from_slice(&stream[start..end]);
+                let page_type = if i == 0 { PageType::CatalogRoot } else { PageType::CatalogData };
+                write_page_header(&mut page_buf, page_type);
+            } else {
+                // v1: raw payload
+                page_buf[..end - start].copy_from_slice(&stream[start..end]);
+            }
             pager.write_page(page_id, &page_buf)?;
         }
 
@@ -481,28 +432,42 @@ impl Catalog {
         pager: &crate::storage::pager::Pager,
         start_page: crate::storage::pager::PageId,
     ) -> Result<Self, GqliteError> {
+        use crate::storage::format::{verify_page_header, PAGE_HEADER_SIZE};
+
         let page_size = pager.page_size() as usize;
+        let is_v2 = pager.header().version >= 2;
+        let header_offset = if is_v2 { PAGE_HEADER_SIZE } else { 0 };
+        let usable_per_page = page_size - header_offset;
 
         // Read first page to get the total length
         let mut first_page = vec![0u8; page_size];
         pager.read_page(start_page, &mut first_page)?;
 
-        let total_len =
-            u64::from_le_bytes(first_page[0..8].try_into().unwrap()) as usize;
-        let total_with_header = 8 + total_len;
-        let pages_needed = (total_with_header + page_size - 1) / page_size;
+        if is_v2 {
+            verify_page_header(&first_page, start_page)?;
+        }
 
-        // Accumulate all bytes
-        let mut stream = Vec::with_capacity(total_with_header);
-        stream.extend_from_slice(&first_page[..std::cmp::min(page_size, total_with_header)]);
+        let total_len =
+            u64::from_le_bytes(first_page[header_offset..header_offset + 8].try_into().unwrap())
+                as usize;
+        let total_with_prefix = 8 + total_len;
+        let pages_needed = total_with_prefix.div_ceil(usable_per_page);
+
+        // Accumulate all payload bytes
+        let first_take = std::cmp::min(usable_per_page, total_with_prefix);
+        let mut stream = Vec::with_capacity(total_with_prefix);
+        stream.extend_from_slice(&first_page[header_offset..header_offset + first_take]);
 
         for i in 1..pages_needed {
             let page_id = start_page + i as u64;
             let mut buf = vec![0u8; page_size];
             pager.read_page(page_id, &mut buf)?;
-            let remaining = total_with_header - stream.len();
-            let take = std::cmp::min(page_size, remaining);
-            stream.extend_from_slice(&buf[..take]);
+            if is_v2 {
+                verify_page_header(&buf, page_id)?;
+            }
+            let remaining = total_with_prefix - stream.len();
+            let take = std::cmp::min(usable_per_page, remaining);
+            stream.extend_from_slice(&buf[header_offset..header_offset + take]);
         }
 
         // Skip the 8-byte length prefix
@@ -516,4 +481,3 @@ impl Default for Catalog {
         Self::new()
     }
 }
-

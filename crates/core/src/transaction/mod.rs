@@ -5,6 +5,7 @@
 //! - Write exclusion is enforced via a `Mutex`.
 
 pub mod wal;
+pub mod write_set;
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -122,10 +123,9 @@ impl TransactionManager {
     /// The returned [`WriteGuard`] must be kept alive for the duration of the
     /// transaction — dropping it releases the write lock.
     pub fn begin_read_write(&self) -> Result<(Transaction, WriteGuard<'_>), GqliteError> {
-        let guard = self
-            .write_lock
-            .try_lock()
-            .ok_or_else(|| GqliteError::Transaction("another write transaction is active".into()))?;
+        let guard = self.write_lock.try_lock().ok_or_else(|| {
+            GqliteError::Transaction("another write transaction is active".into())
+        })?;
         let id = self.next_txn_id.fetch_add(1, Ordering::SeqCst);
         let snapshot = self.last_committed_id.load(Ordering::SeqCst);
         Ok((
@@ -199,4 +199,3 @@ impl Default for TransactionManager {
 }
 
 // ── Tests ────────────────────────────────────────────────────────
-

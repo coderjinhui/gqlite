@@ -1,8 +1,8 @@
 //! Date/time constructor functions.
 
-use chrono::NaiveDate;
 use crate::error::GqliteError;
 use crate::types::value::Value;
+use chrono::NaiveDate;
 
 /// date('2024-01-15') -> Value::Date
 /// date() -> today's date
@@ -49,9 +49,7 @@ pub fn fn_timestamp(args: &[Value]) -> Result<Value, GqliteError> {
             let ts = chrono::Utc::now().timestamp();
             Ok(Value::Int(ts))
         }
-        Some(Value::DateTime(dt)) => {
-            Ok(Value::Int(dt.and_utc().timestamp()))
-        }
+        Some(Value::DateTime(dt)) => Ok(Value::Int(dt.and_utc().timestamp())),
         _ => Err(GqliteError::Execution("timestamp() expects no arguments or a datetime".into())),
     }
 }

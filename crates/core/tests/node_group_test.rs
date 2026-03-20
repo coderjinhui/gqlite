@@ -11,10 +11,7 @@ fn test_data_types() -> Vec<DataType> {
 fn append_and_read() {
     let mut ng = NodeGroup::new(0, test_data_types());
     for i in 0..10 {
-        let row = vec![
-            Value::Int(i),
-            Value::String(format!("name_{}", i)),
-        ];
+        let row = vec![Value::Int(i), Value::String(format!("name_{}", i))];
         let off = ng.append_row(&row).unwrap();
         assert_eq!(off, i as u64);
     }
@@ -47,10 +44,7 @@ fn cross_chunk_boundary() {
 #[test]
 fn locate() {
     assert_eq!(NodeGroup::locate(0), (0, 0));
-    assert_eq!(
-        NodeGroup::locate(NODE_GROUP_SIZE as u64 - 1),
-        (0, NODE_GROUP_SIZE as u64 - 1)
-    );
+    assert_eq!(NodeGroup::locate(NODE_GROUP_SIZE as u64 - 1), (0, NODE_GROUP_SIZE as u64 - 1));
     assert_eq!(NodeGroup::locate(NODE_GROUP_SIZE as u64), (1, 0));
     assert_eq!(NodeGroup::locate(NODE_GROUP_SIZE as u64 + 5), (1, 5));
 }
@@ -58,13 +52,10 @@ fn locate() {
 #[test]
 fn update_cell() {
     let mut ng = NodeGroup::new(0, vec![DataType::Int64, DataType::String]);
-    ng.append_row(&[Value::Int(1), Value::String("a".into())])
-        .unwrap();
-    ng.append_row(&[Value::Int(2), Value::String("b".into())])
-        .unwrap();
+    ng.append_row(&[Value::Int(1), Value::String("a".into())]).unwrap();
+    ng.append_row(&[Value::Int(2), Value::String("b".into())]).unwrap();
 
-    ng.set_value(0, 1, &Value::String("updated".into()))
-        .unwrap();
+    ng.set_value(0, 1, &Value::String("updated".into())).unwrap();
     let row = ng.read_row(0).unwrap();
     assert_eq!(row[1], Value::String("updated".into()));
 }

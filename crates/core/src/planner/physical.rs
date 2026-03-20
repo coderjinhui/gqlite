@@ -11,12 +11,7 @@ use crate::types::data_type::DataType;
 #[derive(Debug, Clone)]
 pub enum PhysicalPlan {
     /// Sequential scan over stored nodes.
-    SeqScan {
-        table_name: String,
-        table_id: u32,
-        columns: Vec<usize>,
-        alias: String,
-    },
+    SeqScan { table_name: String, table_id: u32, columns: Vec<usize>, alias: String },
 
     /// Expand from source nodes to neighbors via relationships.
     CsrExpand {
@@ -33,16 +28,10 @@ pub enum PhysicalPlan {
     },
 
     /// Apply a filter expression.
-    Filter {
-        input: Box<PhysicalPlan>,
-        predicate: Expr,
-    },
+    Filter { input: Box<PhysicalPlan>, predicate: Expr },
 
     /// Emit selected expressions.
-    Projection {
-        input: Box<PhysicalPlan>,
-        expressions: Vec<(Expr, Option<String>)>,
-    },
+    Projection { input: Box<PhysicalPlan>, expressions: Vec<(Expr, Option<String>)> },
 
     /// Return all columns from input.
     ReturnAll { input: Box<PhysicalPlan> },
@@ -56,11 +45,7 @@ pub enum PhysicalPlan {
     },
 
     /// Insert a new node row.
-    InsertNode {
-        table_name: String,
-        table_id: u32,
-        values: Vec<(usize, Expr)>,
-    },
+    InsertNode { table_name: String, table_id: u32, values: Vec<(usize, Expr)> },
 
     /// Insert a new relationship.
     InsertRel {
@@ -73,24 +58,13 @@ pub enum PhysicalPlan {
     },
 
     /// Set properties on matched nodes/rels.
-    SetProperty {
-        input: Box<PhysicalPlan>,
-        items: Vec<BoundSetItem>,
-    },
+    SetProperty { input: Box<PhysicalPlan>, items: Vec<BoundSetItem> },
 
     /// Delete matched nodes/rels.
-    Delete {
-        input: Box<PhysicalPlan>,
-        detach: bool,
-        variables: Vec<String>,
-    },
+    Delete { input: Box<PhysicalPlan>, detach: bool, variables: Vec<String> },
 
     /// DDL: Create a node table.
-    CreateNodeTable {
-        name: String,
-        columns: Vec<(String, DataType)>,
-        primary_key: String,
-    },
+    CreateNodeTable { name: String, columns: Vec<(String, DataType)>, primary_key: String },
 
     /// DDL: Create a relationship table.
     CreateRelTable {
@@ -104,18 +78,10 @@ pub enum PhysicalPlan {
     DropTable { name: String },
 
     /// DDL: Alter a table.
-    AlterTable {
-        table_name: String,
-        action: AlterTableAction,
-    },
+    AlterTable { table_name: String, action: AlterTableAction },
 
     /// COPY FROM CSV.
-    CopyFrom {
-        table_name: String,
-        file_path: String,
-        header: bool,
-        delimiter: char,
-    },
+    CopyFrom { table_name: String, file_path: String, header: bool, delimiter: char },
 
     /// COPY TO CSV.
     CopyTo {
@@ -126,38 +92,22 @@ pub enum PhysicalPlan {
     },
 
     /// Sort rows by expressions.
-    OrderBy {
-        input: Box<PhysicalPlan>,
-        items: Vec<OrderByItem>,
-    },
+    OrderBy { input: Box<PhysicalPlan>, items: Vec<OrderByItem> },
 
     /// Limit output to N rows.
-    Limit {
-        input: Box<PhysicalPlan>,
-        count: Expr,
-    },
+    Limit { input: Box<PhysicalPlan>, count: Expr },
 
     /// Skip the first N rows.
-    Skip {
-        input: Box<PhysicalPlan>,
-        count: Expr,
-    },
+    Skip { input: Box<PhysicalPlan>, count: Expr },
 
     /// Aggregate with implicit GROUP BY from non-aggregate expressions.
-    Aggregate {
-        input: Box<PhysicalPlan>,
-        expressions: Vec<(Expr, Option<String>)>,
-    },
+    Aggregate { input: Box<PhysicalPlan>, expressions: Vec<(Expr, Option<String>)> },
 
     /// Empty result (no-op).
     EmptyResult,
 
     /// Combine two query results.
-    Union {
-        left: Box<PhysicalPlan>,
-        right: Box<PhysicalPlan>,
-        all: bool,
-    },
+    Union { left: Box<PhysicalPlan>, right: Box<PhysicalPlan>, all: bool },
 
     /// Variable-length recursive expand (BFS).
     RecursiveExpand {
@@ -188,11 +138,7 @@ pub enum PhysicalPlan {
     },
 
     /// Expand a list expression into multiple rows.
-    Unwind {
-        input: Box<PhysicalPlan>,
-        expr: Expr,
-        alias: String,
-    },
+    Unwind { input: Box<PhysicalPlan>, expr: Expr, alias: String },
 
     /// Upsert: match or create a node.
     Merge {
@@ -204,10 +150,7 @@ pub enum PhysicalPlan {
     },
 
     /// Execute a subquery and concatenate/cross-join results with input.
-    CallSubquery {
-        input: Box<PhysicalPlan>,
-        subquery: QueryStatement,
-    },
+    CallSubquery { input: Box<PhysicalPlan>, subquery: QueryStatement },
 }
 
 impl PhysicalPlan {
@@ -245,55 +188,158 @@ impl PhysicalPlan {
             | PhysicalPlan::Merge { .. } => false,
         }
     }
-}
 
-/// Translate a logical plan into a physical plan (1:1 mapping for now).
-pub fn to_physical(
-    logical: &crate::planner::logical::LogicalOperator,
-) -> PhysicalPlan {
+    /// Produce a human-readable text representation of this execution plan.
+    pub fn explain_text(&self, indent: usize) -> String {
+        let prefix = "  ".repeat(indent);
+        match self {
+            PhysicalPlan::SeqScan { table_name, alias, .. } => {
+                format!("{}SeqScan(table={}, alias={})\n", prefix, table_name, alias)
+            }
+            PhysicalPlan::Filter { input, .. } => {
+                format!("{}Filter\n{}", prefix, input.explain_text(indent + 1))
+            }
+            PhysicalPlan::Projection { input, expressions } => {
+                format!(
+                    "{}Projection(cols={})\n{}",
+                    prefix,
+                    expressions.len(),
+                    input.explain_text(indent + 1)
+                )
+            }
+            PhysicalPlan::ReturnAll { input } => {
+                format!("{}ReturnAll\n{}", prefix, input.explain_text(indent + 1))
+            }
+            PhysicalPlan::HashJoin { build, probe, .. } => {
+                format!(
+                    "{}HashJoin\n{}  build:\n{}{}  probe:\n{}",
+                    prefix,
+                    prefix,
+                    build.explain_text(indent + 2),
+                    prefix,
+                    probe.explain_text(indent + 2)
+                )
+            }
+            PhysicalPlan::CsrExpand { input, rel_table_name, direction, .. } => {
+                format!(
+                    "{}CsrExpand(rel={}, dir={:?})\n{}",
+                    prefix,
+                    rel_table_name,
+                    direction,
+                    input.explain_text(indent + 1)
+                )
+            }
+            PhysicalPlan::RecursiveExpand { input, rel_table_name, .. } => {
+                format!(
+                    "{}RecursiveExpand(rel={})\n{}",
+                    prefix,
+                    rel_table_name,
+                    input.explain_text(indent + 1)
+                )
+            }
+            PhysicalPlan::OrderBy { input, .. } => {
+                format!("{}OrderBy\n{}", prefix, input.explain_text(indent + 1))
+            }
+            PhysicalPlan::Limit { input, count } => {
+                format!("{}Limit({:?})\n{}", prefix, count, input.explain_text(indent + 1))
+            }
+            PhysicalPlan::Skip { input, count } => {
+                format!("{}Skip({:?})\n{}", prefix, count, input.explain_text(indent + 1))
+            }
+            PhysicalPlan::Aggregate { input, .. } => {
+                format!("{}Aggregate\n{}", prefix, input.explain_text(indent + 1))
+            }
+            PhysicalPlan::Union { left, right, all } => {
+                format!(
+                    "{}Union(all={})\n{}{}",
+                    prefix,
+                    all,
+                    left.explain_text(indent + 1),
+                    right.explain_text(indent + 1)
+                )
+            }
+            PhysicalPlan::Unwind { input, .. } => {
+                format!("{}Unwind\n{}", prefix, input.explain_text(indent + 1))
+            }
+            PhysicalPlan::InsertNode { table_name, .. } => {
+                format!("{}InsertNode(table={})\n", prefix, table_name)
+            }
+            PhysicalPlan::InsertRel { input, rel_table_name, .. } => {
+                format!(
+                    "{}InsertRel(rel={})\n{}",
+                    prefix,
+                    rel_table_name,
+                    input.explain_text(indent + 1)
+                )
+            }
+            PhysicalPlan::SetProperty { input, .. } => {
+                format!("{}SetProperty\n{}", prefix, input.explain_text(indent + 1))
+            }
+            PhysicalPlan::Delete { input, .. } => {
+                format!("{}Delete\n{}", prefix, input.explain_text(indent + 1))
+            }
+            PhysicalPlan::Merge { table_name, .. } => {
+                format!("{}Merge(table={})\n", prefix, table_name)
+            }
+            PhysicalPlan::CreateNodeTable { name, .. } => {
+                format!("{}CreateNodeTable({})\n", prefix, name)
+            }
+            PhysicalPlan::CreateRelTable { name, .. } => {
+                format!("{}CreateRelTable({})\n", prefix, name)
+            }
+            PhysicalPlan::DropTable { name } => format!("{}DropTable({})\n", prefix, name),
+            PhysicalPlan::AlterTable { table_name, .. } => {
+                format!("{}AlterTable({})\n", prefix, table_name)
+            }
+            PhysicalPlan::CopyFrom { table_name, .. } => {
+                format!("{}CopyFrom({})\n", prefix, table_name)
+            }
+            PhysicalPlan::CopyTo { .. } => format!("{}CopyTo\n", prefix),
+            PhysicalPlan::EmptyResult => format!("{}EmptyResult\n", prefix),
+            PhysicalPlan::ShortestPath { input, .. } => {
+                format!("{}ShortestPath\n{}", prefix, input.explain_text(indent + 1))
+            }
+            PhysicalPlan::CallSubquery { input, .. } => {
+                format!("{}CallSubquery\n{}", prefix, input.explain_text(indent + 1))
+            }
+        }
+    }
+}
+pub fn to_physical(logical: &crate::planner::logical::LogicalOperator) -> PhysicalPlan {
     use crate::planner::logical::LogicalOperator;
 
     match logical {
-        LogicalOperator::ScanNode {
-            table_name,
-            table_id,
-            columns,
-            alias,
-        } => PhysicalPlan::SeqScan {
-            table_name: table_name.clone(),
-            table_id: *table_id,
-            columns: columns.clone(),
-            alias: alias.clone(),
-        },
+        LogicalOperator::ScanNode { table_name, table_id, columns, alias } => {
+            PhysicalPlan::SeqScan {
+                table_name: table_name.clone(),
+                table_id: *table_id,
+                columns: columns.clone(),
+                alias: alias.clone(),
+            }
+        }
 
         LogicalOperator::Filter { input, predicate } => PhysicalPlan::Filter {
             input: Box::new(to_physical(input)),
             predicate: predicate.clone(),
         },
 
-        LogicalOperator::Projection {
-            input,
-            expressions,
-        } => PhysicalPlan::Projection {
+        LogicalOperator::Projection { input, expressions } => PhysicalPlan::Projection {
             input: Box::new(to_physical(input)),
             expressions: expressions.clone(),
         },
 
-        LogicalOperator::ReturnAll { input } => PhysicalPlan::ReturnAll {
-            input: Box::new(to_physical(input)),
-        },
+        LogicalOperator::ReturnAll { input } => {
+            PhysicalPlan::ReturnAll { input: Box::new(to_physical(input)) }
+        }
 
-        LogicalOperator::HashJoin {
-            build,
-            probe,
-            build_key,
-            probe_key,
-        } => PhysicalPlan::HashJoin {
-            build: Box::new(to_physical(build)),
-            probe: Box::new(to_physical(probe)),
-            build_key: build_key.clone(),
-            probe_key: probe_key.clone(),
-        },
+        LogicalOperator::HashJoin { build, probe, build_key, probe_key } => {
+            PhysicalPlan::HashJoin {
+                build: Box::new(to_physical(build)),
+                probe: Box::new(to_physical(probe)),
+                build_key: build_key.clone(),
+                probe_key: probe_key.clone(),
+            }
+        }
 
         LogicalOperator::Expand {
             input,
@@ -367,11 +413,7 @@ pub fn to_physical(
             all_paths: *all_paths,
         },
 
-        LogicalOperator::InsertNode {
-            table_name,
-            table_id,
-            values,
-        } => PhysicalPlan::InsertNode {
+        LogicalOperator::InsertNode { table_name, table_id, values } => PhysicalPlan::InsertNode {
             table_name: table_name.clone(),
             table_id: *table_id,
             values: values.clone(),
@@ -393,95 +435,68 @@ pub fn to_physical(
             properties: properties.clone(),
         },
 
-        LogicalOperator::SetProperty { input, items } => PhysicalPlan::SetProperty {
-            input: Box::new(to_physical(input)),
-            items: items.clone(),
-        },
+        LogicalOperator::SetProperty { input, items } => {
+            PhysicalPlan::SetProperty { input: Box::new(to_physical(input)), items: items.clone() }
+        }
 
-        LogicalOperator::Delete {
-            input,
-            detach,
-            variables,
-        } => PhysicalPlan::Delete {
+        LogicalOperator::Delete { input, detach, variables } => PhysicalPlan::Delete {
             input: Box::new(to_physical(input)),
             detach: *detach,
             variables: variables.clone(),
         },
 
-        LogicalOperator::CreateNodeTable {
-            name,
-            columns,
-            primary_key,
-        } => PhysicalPlan::CreateNodeTable {
-            name: name.clone(),
-            columns: columns.clone(),
-            primary_key: primary_key.clone(),
-        },
+        LogicalOperator::CreateNodeTable { name, columns, primary_key } => {
+            PhysicalPlan::CreateNodeTable {
+                name: name.clone(),
+                columns: columns.clone(),
+                primary_key: primary_key.clone(),
+            }
+        }
 
-        LogicalOperator::CreateRelTable {
-            name,
-            from_table,
-            to_table,
-            columns,
-        } => PhysicalPlan::CreateRelTable {
-            name: name.clone(),
-            from_table: from_table.clone(),
-            to_table: to_table.clone(),
-            columns: columns.clone(),
-        },
+        LogicalOperator::CreateRelTable { name, from_table, to_table, columns } => {
+            PhysicalPlan::CreateRelTable {
+                name: name.clone(),
+                from_table: from_table.clone(),
+                to_table: to_table.clone(),
+                columns: columns.clone(),
+            }
+        }
 
-        LogicalOperator::DropTable { name } => PhysicalPlan::DropTable {
-            name: name.clone(),
-        },
+        LogicalOperator::DropTable { name } => PhysicalPlan::DropTable { name: name.clone() },
 
-        LogicalOperator::AlterTable { table_name, action } => PhysicalPlan::AlterTable {
-            table_name: table_name.clone(),
-            action: action.clone(),
-        },
+        LogicalOperator::AlterTable { table_name, action } => {
+            PhysicalPlan::AlterTable { table_name: table_name.clone(), action: action.clone() }
+        }
 
-        LogicalOperator::CopyFrom {
-            table_name,
-            file_path,
-            header,
-            delimiter,
-        } => PhysicalPlan::CopyFrom {
-            table_name: table_name.clone(),
-            file_path: file_path.clone(),
-            header: *header,
-            delimiter: *delimiter,
-        },
+        LogicalOperator::CopyFrom { table_name, file_path, header, delimiter } => {
+            PhysicalPlan::CopyFrom {
+                table_name: table_name.clone(),
+                file_path: file_path.clone(),
+                header: *header,
+                delimiter: *delimiter,
+            }
+        }
 
-        LogicalOperator::CopyTo {
-            source,
-            file_path,
-            header,
-            delimiter,
-        } => PhysicalPlan::CopyTo {
+        LogicalOperator::CopyTo { source, file_path, header, delimiter } => PhysicalPlan::CopyTo {
             source: source.clone(),
             file_path: file_path.clone(),
             header: *header,
             delimiter: *delimiter,
         },
 
-        LogicalOperator::OrderBy { input, items } => PhysicalPlan::OrderBy {
-            input: Box::new(to_physical(input)),
-            items: items.clone(),
-        },
+        LogicalOperator::OrderBy { input, items } => {
+            PhysicalPlan::OrderBy { input: Box::new(to_physical(input)), items: items.clone() }
+        }
 
-        LogicalOperator::Limit { input, count } => PhysicalPlan::Limit {
-            input: Box::new(to_physical(input)),
-            count: count.clone(),
-        },
+        LogicalOperator::Limit { input, count } => {
+            PhysicalPlan::Limit { input: Box::new(to_physical(input)), count: count.clone() }
+        }
 
-        LogicalOperator::Skip { input, count } => PhysicalPlan::Skip {
-            input: Box::new(to_physical(input)),
-            count: count.clone(),
-        },
+        LogicalOperator::Skip { input, count } => {
+            PhysicalPlan::Skip { input: Box::new(to_physical(input)), count: count.clone() }
+        }
 
-        LogicalOperator::Aggregate {
-            input,
-            expressions,
-        } => PhysicalPlan::Aggregate {
+        LogicalOperator::Aggregate { input, expressions } => PhysicalPlan::Aggregate {
             input: Box::new(to_physical(input)),
             expressions: expressions.clone(),
         },
@@ -494,29 +509,21 @@ pub fn to_physical(
             all: *all,
         },
 
-        LogicalOperator::Unwind {
-            input,
-            expr,
-            alias,
-        } => PhysicalPlan::Unwind {
+        LogicalOperator::Unwind { input, expr, alias } => PhysicalPlan::Unwind {
             input: Box::new(to_physical(input)),
             expr: expr.clone(),
             alias: alias.clone(),
         },
 
-        LogicalOperator::Merge {
-            table_name,
-            table_id,
-            properties,
-            on_create,
-            on_match,
-        } => PhysicalPlan::Merge {
-            table_name: table_name.clone(),
-            table_id: *table_id,
-            properties: properties.clone(),
-            on_create: on_create.clone(),
-            on_match: on_match.clone(),
-        },
+        LogicalOperator::Merge { table_name, table_id, properties, on_create, on_match } => {
+            PhysicalPlan::Merge {
+                table_name: table_name.clone(),
+                table_id: *table_id,
+                properties: properties.clone(),
+                on_create: on_create.clone(),
+                on_match: on_match.clone(),
+            }
+        }
 
         LogicalOperator::CallSubquery { input, subquery } => PhysicalPlan::CallSubquery {
             input: Box::new(to_physical(input)),

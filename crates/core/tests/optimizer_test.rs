@@ -4,8 +4,7 @@ use gqlite_core::parser::ast::{BinOp, Direction, Expr};
 use gqlite_core::parser::parser::Parser;
 use gqlite_core::planner::logical::{LogicalOperator, Planner};
 use gqlite_core::planner::optimizer::{
-    collect_plan_aliases, combine_conjuncts, optimize, referenced_aliases,
-    split_conjuncts,
+    collect_plan_aliases, combine_conjuncts, optimize, referenced_aliases, split_conjuncts,
 };
 use gqlite_core::types::data_type::DataType;
 
@@ -57,12 +56,8 @@ fn test_catalog() -> Catalog {
             "id",
         )
         .unwrap();
-    catalog
-        .create_rel_table("KNOWS", "Person", "Person", vec![])
-        .unwrap();
-    catalog
-        .create_rel_table("LIVES_IN", "Person", "City", vec![])
-        .unwrap();
+    catalog.create_rel_table("KNOWS", "Person", "Person", vec![]).unwrap();
+    catalog.create_rel_table("LIVES_IN", "Person", "City", vec![]).unwrap();
     catalog
 }
 
@@ -140,10 +135,7 @@ fn filter_pushdown_mixed_conjuncts() {
                     expand_in
                 );
             } else {
-                panic!(
-                    "expected Expand below cross-table filter, got {:?}",
-                    join_filter_in
-                );
+                panic!("expected Expand below cross-table filter, got {:?}", join_filter_in);
             }
         } else {
             panic!("expected Filter (cross-table) under Projection, got {:?}", input);
@@ -156,10 +148,7 @@ fn filter_pushdown_mixed_conjuncts() {
 #[test]
 fn filter_pushdown_no_filter() {
     let catalog = test_catalog();
-    let plan = plan_and_optimize(
-        &catalog,
-        "MATCH (a:Person)-[r:KNOWS]->(b:Person) RETURN a, b",
-    );
+    let plan = plan_and_optimize(&catalog, "MATCH (a:Person)-[r:KNOWS]->(b:Person) RETURN a, b");
     if let LogicalOperator::Projection { input, .. } = &plan {
         assert!(
             matches!(input.as_ref(), LogicalOperator::Expand { .. }),
@@ -209,15 +198,9 @@ fn referenced_aliases_property() {
 #[test]
 fn referenced_aliases_binary_cross() {
     let expr = Expr::BinaryOp {
-        left: Box::new(Expr::Property(
-            Box::new(Expr::Ident("a".into())),
-            "id".into(),
-        )),
+        left: Box::new(Expr::Property(Box::new(Expr::Ident("a".into())), "id".into())),
         op: BinOp::Eq,
-        right: Box::new(Expr::Property(
-            Box::new(Expr::Ident("b".into())),
-            "id".into(),
-        )),
+        right: Box::new(Expr::Property(Box::new(Expr::Ident("b".into())), "id".into())),
     };
     let aliases = referenced_aliases(&expr);
     assert_eq!(aliases, vec!["a".to_string(), "b".to_string()]);

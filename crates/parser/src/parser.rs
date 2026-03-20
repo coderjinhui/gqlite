@@ -1,8 +1,11 @@
-use crate::ParseError;
 use crate::data_type::DataType;
+use crate::ParseError;
 
 use super::ast::*;
 use super::token::Token;
+
+/// Intermediate result of parsing a relationship's inner components.
+type RelInnerResult = (Option<String>, Option<String>, Vec<(String, Expr)>, Option<(u32, u32)>);
 
 /// Recursive descent parser for the gqlite Cypher subset.
 pub struct Parser {
@@ -17,8 +20,7 @@ impl Parser {
 
     /// Parse from a raw query string (tokenize + parse).
     pub fn parse_query(input: &str) -> Result<Statement, ParseError> {
-        let tokens = super::token::tokenize(input)
-            .map_err(|e| ParseError::Lex(e))?;
+        let tokens = super::token::tokenize(input).map_err(ParseError::Lex)?;
         let mut parser = Parser::new(tokens);
         parser.parse()
     }
@@ -26,8 +28,7 @@ impl Parser {
     /// Parse a raw query string that may contain multiple semicolon-separated
     /// statements. Returns all parsed statements in order.
     pub fn parse_all(input: &str) -> Result<Vec<Statement>, ParseError> {
-        let tokens = super::token::tokenize(input)
-            .map_err(|e| ParseError::Lex(e))?;
+        let tokens = super::token::tokenize(input).map_err(ParseError::Lex)?;
         let mut parser = Parser::new(tokens);
         let mut stmts = Vec::new();
         // Skip leading semicolons
@@ -48,6 +49,39 @@ impl Parser {
         }
 
         let stmt = match self.peek() {
+            Token::Explain => {
+                self.advance();
+                let inner = self.parse()?;
+                return Ok(Statement::Explain(Box::new(inner)));
+            }
+            Token::Begin => {
+                self.advance();
+                // Accept optional TRANSACTION keyword (as identifier)
+                if let Token::Ident(s) = self.peek() {
+                    if s.to_uppercase() == "TRANSACTION" {
+                        self.advance();
+                    }
+                }
+                Ok(Statement::Begin)
+            }
+            Token::Commit => {
+                self.advance();
+                if let Token::Ident(s) = self.peek() {
+                    if s.to_uppercase() == "TRANSACTION" {
+                        self.advance();
+                    }
+                }
+                Ok(Statement::Commit)
+            }
+            Token::Rollback => {
+                self.advance();
+                if let Token::Ident(s) = self.peek() {
+                    if s.to_uppercase() == "TRANSACTION" {
+                        self.advance();
+                    }
+                }
+                Ok(Statement::Rollback)
+            }
             Token::Call => {
                 // CALL { subquery } → parse as query clause
                 // CALL procedure_name(...) → parse as procedure call
@@ -93,11 +127,7 @@ impl Parser {
             self.advance();
         }
         let right = self.parse()?;
-        Ok(Statement::Union {
-            left: Box::new(left),
-            right: Box::new(right),
-            all,
-        })
+        Ok(Statement::Union { left: Box::new(left), right: Box::new(right), all })
     }
 
     // ── CALL Statement ─────────────────────────────────────────
@@ -276,11 +306,7 @@ impl Parser {
         self.expect(&Token::LParen)?;
         let pattern = self.parse_path_pattern()?;
         self.expect(&Token::RParen)?;
-        Ok(ShortestPathPattern {
-            path_variable,
-            pattern,
-            all_paths,
-        })
+        Ok(ShortestPathPattern { path_variable, pattern, all_paths })
     }
 
     fn parse_path_pattern(&mut self) -> Result<PathPattern, ParseError> {
@@ -318,11 +344,7 @@ impl Parser {
         }
 
         self.expect(&Token::RParen)?;
-        Ok(NodePattern {
-            alias,
-            label,
-            properties,
-        })
+        Ok(NodePattern { alias, label, properties })
     }
 
     fn is_rel_start(&self) -> bool {
@@ -368,18 +390,10 @@ impl Parser {
             }
         }
 
-        Ok(RelPattern {
-            alias,
-            label,
-            direction,
-            properties,
-            var_length,
-        })
+        Ok(RelPattern { alias, label, direction, properties, var_length })
     }
 
-    fn parse_rel_inner(
-        &mut self,
-    ) -> Result<(Option<String>, Option<String>, Vec<(String, Expr)>, Option<(u32, u32)>), ParseError> {
+    fn parse_rel_inner(&mut self) -> Result<RelInnerResult, ParseError> {
         let mut alias = None;
         let mut label = None;
         let mut properties = Vec::new();
@@ -473,11 +487,7 @@ impl Parser {
         }
 
         let items = self.parse_return_items()?;
-        Ok(Clause::Return(ReturnClause {
-            distinct,
-            items,
-            return_all: false,
-        }))
+        Ok(Clause::Return(ReturnClause { distinct, items, return_all: false }))
     }
 
     fn parse_return_items(&mut self) -> Result<Vec<ReturnItem>, ParseError> {
@@ -576,10 +586,7 @@ impl Parser {
         let field = self.expect_ident()?;
         self.expect(&Token::Eq)?;
         let value = self.parse_expr()?;
-        Ok(SetItem {
-            property: PropertyRef { variable, field },
-            value,
-        })
+        Ok(SetItem { property: PropertyRef { variable, field }, value })
     }
 
     // ── DELETE ───────────────────────────────────────────────────
@@ -644,11 +651,7 @@ impl Parser {
             }
         }
 
-        Ok(Clause::Merge(MergeClause {
-            pattern,
-            on_create,
-            on_match,
-        }))
+        Ok(Clause::Merge(MergeClause { pattern, on_create, on_match }))
     }
 
     // ── DDL ─────────────────────────────────────────────────────
@@ -677,10 +680,7 @@ impl Parser {
             } else {
                 let col_name = self.expect_ident()?;
                 let data_type = self.parse_data_type()?;
-                columns.push(ColumnDefAst {
-                    name: col_name,
-                    data_type,
-                });
+                columns.push(ColumnDefAst { name: col_name, data_type });
             }
 
             if !self.check(&Token::Comma) {
@@ -691,14 +691,9 @@ impl Parser {
 
         self.expect(&Token::RParen)?;
 
-        let pk = primary_key
-            .ok_or_else(|| self.error("CREATE NODE TABLE requires PRIMARY KEY"))?;
+        let pk = primary_key.ok_or_else(|| self.error("CREATE NODE TABLE requires PRIMARY KEY"))?;
 
-        Ok(Statement::CreateNodeTable(CreateNodeTableStmt {
-            name,
-            columns,
-            primary_key: pk,
-        }))
+        Ok(Statement::CreateNodeTable(CreateNodeTableStmt { name, columns, primary_key: pk }))
     }
 
     fn parse_create_rel_table(&mut self) -> Result<Statement, ParseError> {
@@ -722,20 +717,12 @@ impl Parser {
             }
             let col_name = self.expect_ident()?;
             let data_type = self.parse_data_type()?;
-            columns.push(ColumnDefAst {
-                name: col_name,
-                data_type,
-            });
+            columns.push(ColumnDefAst { name: col_name, data_type });
         }
 
         self.expect(&Token::RParen)?;
 
-        Ok(Statement::CreateRelTable(CreateRelTableStmt {
-            name,
-            from_table,
-            to_table,
-            columns,
-        }))
+        Ok(Statement::CreateRelTable(CreateRelTableStmt { name, from_table, to_table, columns }))
     }
 
     fn parse_drop_table(&mut self) -> Result<Statement, ParseError> {
@@ -760,12 +747,7 @@ impl Parser {
                 }
                 let col_name = self.expect_ident()?;
                 let data_type = self.parse_data_type()?;
-                AlterTableAction::AddColumn {
-                    col: ColumnDefAst {
-                        name: col_name,
-                        data_type,
-                    },
-                }
+                AlterTableAction::AddColumn { col: ColumnDefAst { name: col_name, data_type } }
             }
             Token::Drop => {
                 // ALTER TABLE t DROP COLUMN col_name
@@ -798,10 +780,7 @@ impl Parser {
             _ => return Err(self.error("expected ADD, DROP, or RENAME after ALTER TABLE")),
         };
 
-        Ok(Statement::AlterTable(AlterTableStmt {
-            table_name,
-            action,
-        }))
+        Ok(Statement::AlterTable(AlterTableStmt { table_name, action }))
     }
 
     fn parse_copy(&mut self) -> Result<Statement, ParseError> {
@@ -831,12 +810,7 @@ impl Parser {
             self.advance();
             let file_path = self.expect_string_lit()?;
             let (header, delimiter) = self.parse_copy_options()?;
-            Ok(Statement::CopyFrom(CopyFromStmt {
-                table_name,
-                file_path,
-                header,
-                delimiter,
-            }))
+            Ok(Statement::CopyFrom(CopyFromStmt { table_name, file_path, header, delimiter }))
         } else if self.check(&Token::To) {
             self.advance();
             let file_path = self.expect_string_lit()?;
@@ -940,11 +914,7 @@ impl Parser {
         while self.check(&Token::Or) {
             self.advance();
             let right = self.parse_and_expr()?;
-            left = Expr::BinaryOp {
-                left: Box::new(left),
-                op: BinOp::Or,
-                right: Box::new(right),
-            };
+            left = Expr::BinaryOp { left: Box::new(left), op: BinOp::Or, right: Box::new(right) };
         }
         Ok(left)
     }
@@ -954,11 +924,7 @@ impl Parser {
         while self.check(&Token::And) {
             self.advance();
             let right = self.parse_not_expr()?;
-            left = Expr::BinaryOp {
-                left: Box::new(left),
-                op: BinOp::And,
-                right: Box::new(right),
-            };
+            left = Expr::BinaryOp { left: Box::new(left), op: BinOp::And, right: Box::new(right) };
         }
         Ok(left)
     }
@@ -967,10 +933,7 @@ impl Parser {
         if self.check(&Token::Not) {
             self.advance();
             let expr = self.parse_comparison()?;
-            Ok(Expr::UnaryOp {
-                op: UnaryOp::Not,
-                expr: Box::new(expr),
-            })
+            Ok(Expr::UnaryOp { op: UnaryOp::Not, expr: Box::new(expr) })
         } else {
             self.parse_comparison()
         }
@@ -987,31 +950,20 @@ impl Parser {
                 self.advance();
             }
             self.expect(&Token::Null)?;
-            return Ok(Expr::IsNull {
-                expr: Box::new(left),
-                negated,
-            });
+            return Ok(Expr::IsNull { expr: Box::new(left), negated });
         }
 
         // [NOT] IN [list]
         if self.check(&Token::In) {
             self.advance();
             let list = self.parse_addition()?;
-            return Ok(Expr::In {
-                expr: Box::new(left),
-                list: Box::new(list),
-                negated: false,
-            });
+            return Ok(Expr::In { expr: Box::new(left), list: Box::new(list), negated: false });
         }
         if self.check(&Token::Not) && self.peek_at(1) == &Token::In {
             self.advance(); // consume NOT
             self.advance(); // consume IN
             let list = self.parse_addition()?;
-            return Ok(Expr::In {
-                expr: Box::new(left),
-                list: Box::new(list),
-                negated: true,
-            });
+            return Ok(Expr::In { expr: Box::new(left), list: Box::new(list), negated: true });
         }
 
         let op = match self.peek() {
@@ -1028,11 +980,7 @@ impl Parser {
         if let Some(op) = op {
             self.advance();
             let right = self.parse_addition()?;
-            Ok(Expr::BinaryOp {
-                left: Box::new(left),
-                op,
-                right: Box::new(right),
-            })
+            Ok(Expr::BinaryOp { left: Box::new(left), op, right: Box::new(right) })
         } else {
             Ok(left)
         }
@@ -1048,11 +996,7 @@ impl Parser {
             };
             self.advance();
             let right = self.parse_multiplication()?;
-            left = Expr::BinaryOp {
-                left: Box::new(left),
-                op,
-                right: Box::new(right),
-            };
+            left = Expr::BinaryOp { left: Box::new(left), op, right: Box::new(right) };
         }
         Ok(left)
     }
@@ -1068,11 +1012,7 @@ impl Parser {
             };
             self.advance();
             let right = self.parse_unary()?;
-            left = Expr::BinaryOp {
-                left: Box::new(left),
-                op,
-                right: Box::new(right),
-            };
+            left = Expr::BinaryOp { left: Box::new(left), op, right: Box::new(right) };
         }
         Ok(left)
     }
@@ -1081,10 +1021,7 @@ impl Parser {
         if self.check(&Token::Dash) {
             self.advance();
             let expr = self.parse_primary()?;
-            Ok(Expr::UnaryOp {
-                op: UnaryOp::Neg,
-                expr: Box::new(expr),
-            })
+            Ok(Expr::UnaryOp { op: UnaryOp::Neg, expr: Box::new(expr) })
         } else {
             self.parse_primary()
         }
@@ -1153,10 +1090,7 @@ impl Parser {
                 self.expect(&Token::As)?;
                 let target_type = self.parse_data_type()?;
                 self.expect(&Token::RParen)?;
-                Ok(Expr::Cast {
-                    expr: Box::new(expr),
-                    target_type,
-                })
+                Ok(Expr::Cast { expr: Box::new(expr), target_type })
             }
             Token::Case => self.parse_case_expr(),
             Token::Exists => self.parse_exists_expr(),
@@ -1223,20 +1157,12 @@ impl Parser {
         if self.check(&Token::Star) {
             self.advance();
             self.expect(&Token::RParen)?;
-            return Ok(Expr::FunctionCall {
-                name,
-                distinct: false,
-                args: vec![Expr::Star],
-            });
+            return Ok(Expr::FunctionCall { name, distinct: false, args: vec![Expr::Star] });
         }
 
         if self.check(&Token::RParen) {
             self.advance();
-            return Ok(Expr::FunctionCall {
-                name,
-                distinct: false,
-                args: Vec::new(),
-            });
+            return Ok(Expr::FunctionCall { name, distinct: false, args: Vec::new() });
         }
 
         let distinct = self.check(&Token::Distinct);
@@ -1251,11 +1177,7 @@ impl Parser {
         }
         self.expect(&Token::RParen)?;
 
-        Ok(Expr::FunctionCall {
-            name,
-            distinct,
-            args,
-        })
+        Ok(Expr::FunctionCall { name, distinct, args })
     }
 
     fn parse_case_expr(&mut self) -> Result<Expr, ParseError> {
@@ -1263,11 +1185,8 @@ impl Parser {
 
         // Simple form: CASE <operand> WHEN ...
         // Searched form: CASE WHEN ...
-        let operand = if !self.check(&Token::When) {
-            Some(Box::new(self.parse_expr()?))
-        } else {
-            None
-        };
+        let operand =
+            if !self.check(&Token::When) { Some(Box::new(self.parse_expr()?)) } else { None };
 
         let mut when_clauses = Vec::new();
         while self.check(&Token::When) {
@@ -1291,11 +1210,7 @@ impl Parser {
 
         self.expect(&Token::End)?;
 
-        Ok(Expr::Case {
-            operand,
-            when_clauses,
-            else_result,
-        })
+        Ok(Expr::Case { operand, when_clauses, else_result })
     }
 
     /// Parse `EXISTS { <query-body> }`.

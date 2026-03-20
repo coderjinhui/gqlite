@@ -65,14 +65,9 @@ impl PipelineGraph {
 /// - `OrderBy`: input is a separate pipeline.
 /// - `Aggregate`: input is a separate pipeline.
 pub fn split_into_pipelines(plan: &PhysicalPlan) -> PipelineGraph {
-    let mut ctx = SplitCtx {
-        pipelines: Vec::new(),
-        next_id: 0,
-    };
+    let mut ctx = SplitCtx { pipelines: Vec::new(), next_id: 0 };
     ctx.split(plan);
-    PipelineGraph {
-        pipelines: ctx.pipelines,
-    }
+    PipelineGraph { pipelines: ctx.pipelines }
 }
 
 struct SplitCtx {
@@ -94,12 +89,7 @@ impl SplitCtx {
             // ── Pipeline breakers ───────────────────────────────
 
             // HashJoin: build side is a separate pipeline.
-            PhysicalPlan::HashJoin {
-                build,
-                probe,
-                build_key,
-                probe_key,
-            } => {
+            PhysicalPlan::HashJoin { build, probe, build_key, probe_key } => {
                 // Build pipeline must complete first.
                 let build_pid = self.split(build);
 
@@ -127,10 +117,7 @@ impl SplitCtx {
                 let id = self.alloc_id();
                 self.pipelines.push(Pipeline {
                     id,
-                    plan: PhysicalPlan::OrderBy {
-                        input: input.clone(),
-                        items: items.clone(),
-                    },
+                    plan: PhysicalPlan::OrderBy { input: input.clone(), items: items.clone() },
                     depends_on: vec![input_pid],
                 });
                 id
@@ -174,14 +161,9 @@ impl SplitCtx {
             // since they can stream data.
             _ => {
                 let id = self.alloc_id();
-                self.pipelines.push(Pipeline {
-                    id,
-                    plan: plan.clone(),
-                    depends_on: vec![],
-                });
+                self.pipelines.push(Pipeline { id, plan: plan.clone(), depends_on: vec![] });
                 id
             }
         }
     }
 }
-

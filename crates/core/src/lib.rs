@@ -12,13 +12,17 @@ pub mod parser;
 pub mod planner;
 pub mod procedure;
 pub mod storage;
+pub mod testing;
 pub mod transaction;
 pub mod types;
 
 use std::collections::HashMap;
+use std::fs::{File, OpenOptions};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 
+use fs2::FileExt;
+use log::{debug, info, warn};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 
@@ -33,8 +37,8 @@ use parser::parser::Parser;
 use planner::logical::Planner;
 use planner::physical;
 use storage::table::{NodeTable, RelTable};
-use transaction::TransactionManager;
 use transaction::wal::{WalPayload, WalRecord, WalWriter};
+use transaction::TransactionManager;
 
 // ── Storage ─────────────────────────────────────────────────────
 
@@ -47,10 +51,7 @@ pub struct Storage {
 
 impl Storage {
     pub fn new() -> Self {
-        Self {
-            node_tables: HashMap::new(),
-            rel_tables: HashMap::new(),
-        }
+        Self { node_tables: HashMap::new(), rel_tables: HashMap::new() }
     }
 
     /// Serialize the storage to bytes using bincode.
@@ -69,14 +70,19 @@ impl Storage {
     ///
     /// Format: first 8 bytes = total length (u64 LE), then the bincode payload.
     /// If the data exceeds one page, it spans consecutive pages.
+    /// v2 format: each page has an 8-byte header (page_type + checksum).
     pub fn save_to(
         &self,
         pager: &mut storage::pager::Pager,
         start_page: storage::pager::PageId,
     ) -> Result<(), GqliteError> {
+        use storage::format::{write_page_header, PageType, PAGE_HEADER_SIZE};
+
         let payload = self.to_bytes()?;
         let total_len = payload.len() as u64;
         let page_size = pager.page_size() as usize;
+        let is_v2 = pager.header().version >= 2;
+        let usable_per_page = if is_v2 { page_size - PAGE_HEADER_SIZE } else { page_size };
 
         // Build the full byte stream: 8-byte length prefix + payload
         let mut stream = Vec::with_capacity(8 + payload.len());
@@ -84,7 +90,7 @@ impl Storage {
         stream.extend_from_slice(&payload);
 
         // Calculate how many pages we need
-        let pages_needed = (stream.len() + page_size - 1) / page_size;
+        let pages_needed = stream.len().div_ceil(usable_per_page);
 
         // Ensure we have enough pages allocated
         while pager.page_count() < start_page + pages_needed as u64 {
@@ -94,11 +100,17 @@ impl Storage {
         // Write page by page
         for i in 0..pages_needed {
             let page_id = start_page + i as u64;
-            let start = i * page_size;
-            let end = std::cmp::min(start + page_size, stream.len());
+            let start = i * usable_per_page;
+            let end = std::cmp::min(start + usable_per_page, stream.len());
 
             let mut page_buf = vec![0u8; page_size];
-            page_buf[..end - start].copy_from_slice(&stream[start..end]);
+            if is_v2 {
+                page_buf[PAGE_HEADER_SIZE..PAGE_HEADER_SIZE + (end - start)]
+                    .copy_from_slice(&stream[start..end]);
+                write_page_header(&mut page_buf, PageType::ColumnData);
+            } else {
+                page_buf[..end - start].copy_from_slice(&stream[start..end]);
+            }
             pager.write_page(page_id, &page_buf)?;
         }
 
@@ -110,28 +122,42 @@ impl Storage {
         pager: &storage::pager::Pager,
         start_page: storage::pager::PageId,
     ) -> Result<Self, GqliteError> {
+        use storage::format::{verify_page_header, PAGE_HEADER_SIZE};
+
         let page_size = pager.page_size() as usize;
+        let is_v2 = pager.header().version >= 2;
+        let header_offset = if is_v2 { PAGE_HEADER_SIZE } else { 0 };
+        let usable_per_page = page_size - header_offset;
 
         // Read first page to get the total length
         let mut first_page = vec![0u8; page_size];
         pager.read_page(start_page, &mut first_page)?;
 
-        let total_len =
-            u64::from_le_bytes(first_page[0..8].try_into().unwrap()) as usize;
-        let total_with_header = 8 + total_len;
-        let pages_needed = (total_with_header + page_size - 1) / page_size;
+        if is_v2 {
+            verify_page_header(&first_page, start_page)?;
+        }
 
-        // Accumulate all bytes
-        let mut stream = Vec::with_capacity(total_with_header);
-        stream.extend_from_slice(&first_page[..std::cmp::min(page_size, total_with_header)]);
+        let total_len =
+            u64::from_le_bytes(first_page[header_offset..header_offset + 8].try_into().unwrap())
+                as usize;
+        let total_with_prefix = 8 + total_len;
+        let pages_needed = total_with_prefix.div_ceil(usable_per_page);
+
+        // Accumulate all payload bytes
+        let first_take = std::cmp::min(usable_per_page, total_with_prefix);
+        let mut stream = Vec::with_capacity(total_with_prefix);
+        stream.extend_from_slice(&first_page[header_offset..header_offset + first_take]);
 
         for i in 1..pages_needed {
             let page_id = start_page + i as u64;
             let mut buf = vec![0u8; page_size];
             pager.read_page(page_id, &mut buf)?;
-            let remaining = total_with_header - stream.len();
-            let take = std::cmp::min(page_size, remaining);
-            stream.extend_from_slice(&buf[..take]);
+            if is_v2 {
+                verify_page_header(&buf, page_id)?;
+            }
+            let remaining = total_with_prefix - stream.len();
+            let take = std::cmp::min(usable_per_page, remaining);
+            stream.extend_from_slice(&buf[header_offset..header_offset + take]);
         }
 
         // Skip the 8-byte length prefix
@@ -182,6 +208,9 @@ pub struct DatabaseInner {
     pub txn_manager: TransactionManager,
     /// WAL writer — None for in-memory databases.
     pub wal: Mutex<Option<WalWriter>>,
+    /// File lock — held for the lifetime of the database to prevent concurrent access.
+    /// None for in-memory databases.
+    _lock_file: Option<File>,
 }
 
 // ── Database ────────────────────────────────────────────────────
@@ -208,6 +237,38 @@ impl Database {
         let path = path.as_ref().to_path_buf();
         let wal_path = transaction::wal::wal_path_for(&path);
 
+        // Acquire file lock to prevent concurrent access from other processes.
+        let lock_path = path.with_extension("graph.lock");
+        let lock_file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&lock_path)
+            .map_err(|e| {
+                GqliteError::Storage(format!(
+                    "failed to open lock file '{}': {}",
+                    lock_path.display(),
+                    e
+                ))
+            })?;
+
+        if config.read_only {
+            lock_file.try_lock_shared().map_err(|_| {
+                GqliteError::Storage(format!(
+                    "database '{}' is locked by another process for exclusive access",
+                    path.display()
+                ))
+            })?;
+        } else {
+            lock_file.try_lock_exclusive().map_err(|_| {
+                GqliteError::Storage(format!(
+                    "database '{}' is already opened by another process",
+                    path.display()
+                ))
+            })?;
+        }
+
         let mut catalog = Catalog::new();
         let mut storage = Storage::new();
         let mut max_committed_id = 0u64;
@@ -215,6 +276,7 @@ impl Database {
 
         // Phase 1: Load from .graph main file if it exists and is valid
         if path.exists() {
+            info!("opening database at '{}'", path.display());
             match storage::pager::Pager::open(&path) {
                 Ok(pager) => {
                     let header = pager.header();
@@ -228,6 +290,10 @@ impl Database {
                                         storage = loaded_storage;
                                         checkpoint_ts = header.checkpoint_ts;
                                         max_committed_id = checkpoint_ts;
+                                        info!(
+                                            "loaded checkpoint ts={} version={}",
+                                            checkpoint_ts, header.version
+                                        );
                                     }
                                     Err(_) => {
                                         // Fallback: ignore main file, rely on WAL
@@ -268,6 +334,10 @@ impl Database {
                 if wal_max > max_committed_id {
                     max_committed_id = wal_max;
                 }
+                info!(
+                    "replayed {} WAL records, max_committed_id={}",
+                    wal_record_count, max_committed_id
+                );
             }
         }
 
@@ -290,6 +360,7 @@ impl Database {
                 storage: RwLock::new(storage),
                 txn_manager: TransactionManager::with_recovered_state(max_committed_id),
                 wal: Mutex::new(wal),
+                _lock_file: Some(lock_file),
             }),
         })
     }
@@ -304,15 +375,14 @@ impl Database {
                 storage: RwLock::new(Storage::new()),
                 txn_manager: TransactionManager::new(),
                 wal: Mutex::new(None),
+                _lock_file: None,
             }),
         }
     }
 
     /// Create a connection to this database.
     pub fn connect(&self) -> Connection {
-        Connection {
-            db: self.inner.clone(),
-        }
+        Connection { db: self.inner.clone() }
     }
 
     /// Convenience: execute a GQL statement.
@@ -379,12 +449,239 @@ impl Database {
     pub fn checkpoint(&self) -> Result<(), GqliteError> {
         checkpoint_impl(&self.inner)
     }
+
+    /// Dump the entire database as a Cypher script string.
+    ///
+    /// The output contains:
+    /// 1. CREATE NODE TABLE / CREATE REL TABLE statements (schema)
+    /// 2. CREATE (...) statements for all nodes
+    /// 3. MATCH ... CREATE relationship statements for all edges
+    ///
+    /// The script can be executed against an empty database to restore the data.
+    pub fn dump(&self) -> Result<String, GqliteError> {
+        let catalog = self.inner.catalog.read().unwrap();
+        let storage = self.inner.storage.read().unwrap();
+        let mut out = String::new();
+
+        // 1. Schema: Node tables
+        for entry in catalog.node_tables() {
+            out.push_str("CREATE NODE TABLE ");
+            out.push_str(&entry.name);
+            out.push('(');
+            for (i, col) in entry.columns.iter().enumerate() {
+                if i > 0 {
+                    out.push_str(", ");
+                }
+                out.push_str(&col.name);
+                out.push(' ');
+                out.push_str(&format!("{}", col.data_type));
+            }
+            out.push_str(", PRIMARY KEY(");
+            out.push_str(&entry.columns[entry.primary_key_idx].name);
+            out.push_str("));\n");
+        }
+
+        // 2. Schema: Rel tables
+        for entry in catalog.rel_tables() {
+            let src_name = catalog
+                .get_node_table_by_id(entry.src_table_id)
+                .map(|e| e.name.as_str())
+                .unwrap_or("?");
+            let dst_name = catalog
+                .get_node_table_by_id(entry.dst_table_id)
+                .map(|e| e.name.as_str())
+                .unwrap_or("?");
+            out.push_str("CREATE REL TABLE ");
+            out.push_str(&entry.name);
+            out.push_str("(FROM ");
+            out.push_str(src_name);
+            out.push_str(" TO ");
+            out.push_str(dst_name);
+            for col in &entry.columns {
+                out.push_str(", ");
+                out.push_str(&col.name);
+                out.push(' ');
+                out.push_str(&format!("{}", col.data_type));
+            }
+            out.push_str(");\n");
+        }
+
+        // 3. Data: Nodes
+        for entry in catalog.node_tables() {
+            if let Some(nt) = storage.node_tables.get(&entry.table_id) {
+                for (_offset, row) in nt.scan() {
+                    out.push_str("CREATE (n:");
+                    out.push_str(&entry.name);
+                    out.push_str(" {");
+                    let mut first = true;
+                    for (i, col) in entry.columns.iter().enumerate() {
+                        if i < row.len() && !row[i].is_null() {
+                            if !first {
+                                out.push_str(", ");
+                            }
+                            first = false;
+                            out.push_str(&col.name);
+                            out.push_str(": ");
+                            out.push_str(&value_to_cypher(&row[i]));
+                        }
+                    }
+                    out.push_str("});\n");
+                }
+            }
+        }
+
+        // 4. Data: Relationships
+        for rel_entry in catalog.rel_tables() {
+            let src_entry = catalog.get_node_table_by_id(rel_entry.src_table_id);
+            let dst_entry = catalog.get_node_table_by_id(rel_entry.dst_table_id);
+            if src_entry.is_none() || dst_entry.is_none() {
+                continue;
+            }
+            let src_entry = src_entry.unwrap();
+            let dst_entry = dst_entry.unwrap();
+            let src_pk_col = &src_entry.columns[src_entry.primary_key_idx].name;
+            let dst_pk_col = &dst_entry.columns[dst_entry.primary_key_idx].name;
+
+            if let Some(rt) = storage.rel_tables.get(&rel_entry.table_id) {
+                let src_nt = storage.node_tables.get(&rel_entry.src_table_id);
+                let dst_nt = storage.node_tables.get(&rel_entry.dst_table_id);
+                if src_nt.is_none() || dst_nt.is_none() {
+                    continue;
+                }
+                let src_nt = src_nt.unwrap();
+                let dst_nt = dst_nt.unwrap();
+
+                for (src_id, dst_id) in rt.all_edges() {
+                    // Look up PK values for src and dst
+                    let src_row = src_nt.read(src_id.offset);
+                    let dst_row = dst_nt.read(dst_id.offset);
+                    if src_row.is_err() || dst_row.is_err() {
+                        continue;
+                    }
+                    let src_row = src_row.unwrap();
+                    let dst_row = dst_row.unwrap();
+                    let src_pk = &src_row[src_entry.primary_key_idx];
+                    let dst_pk = &dst_row[dst_entry.primary_key_idx];
+
+                    out.push_str("MATCH (a:");
+                    out.push_str(&src_entry.name);
+                    out.push_str("), (b:");
+                    out.push_str(&dst_entry.name);
+                    out.push_str(") WHERE a.");
+                    out.push_str(src_pk_col);
+                    out.push_str(" = ");
+                    out.push_str(&value_to_cypher(src_pk));
+                    out.push_str(" AND b.");
+                    out.push_str(dst_pk_col);
+                    out.push_str(" = ");
+                    out.push_str(&value_to_cypher(dst_pk));
+                    out.push_str(" CREATE (a)-[r:");
+                    out.push_str(&rel_entry.name);
+                    out.push_str("]->(b);\n");
+                }
+            }
+        }
+
+        Ok(out)
+    }
+
+    /// Check database integrity.
+    ///
+    /// Returns a list of issues found. An empty list means the database is healthy.
+    /// Each issue is a human-readable string describing the problem.
+    pub fn check(&self) -> Vec<String> {
+        let mut issues = Vec::new();
+        let catalog = self.inner.catalog.read().unwrap();
+        let storage = self.inner.storage.read().unwrap();
+
+        // 1. Check Catalog consistency
+        for entry in catalog.node_tables() {
+            if !storage.node_tables.contains_key(&entry.table_id) {
+                issues.push(format!(
+                    "ERROR: node table '{}' (id={}) exists in catalog but not in storage",
+                    entry.name, entry.table_id
+                ));
+            }
+        }
+        for entry in catalog.rel_tables() {
+            if !storage.rel_tables.contains_key(&entry.table_id) {
+                issues.push(format!(
+                    "ERROR: rel table '{}' (id={}) exists in catalog but not in storage",
+                    entry.name, entry.table_id
+                ));
+            }
+            // Check src/dst table references
+            if catalog.get_node_table_by_id(entry.src_table_id).is_none() {
+                issues.push(format!(
+                    "ERROR: rel table '{}' references non-existent src table id={}",
+                    entry.name, entry.src_table_id
+                ));
+            }
+            if catalog.get_node_table_by_id(entry.dst_table_id).is_none() {
+                issues.push(format!(
+                    "ERROR: rel table '{}' references non-existent dst table id={}",
+                    entry.name, entry.dst_table_id
+                ));
+            }
+        }
+
+        // 2. Check storage tables have catalog entries
+        for table_id in storage.node_tables.keys() {
+            if catalog.get_node_table_by_id(*table_id).is_none() {
+                issues.push(format!(
+                    "WARNING: storage has node table id={} with no catalog entry",
+                    table_id
+                ));
+            }
+        }
+
+        // 3. Check MVCC metadata consistency
+        for entry in catalog.node_tables() {
+            if let Some(nt) = storage.node_tables.get(&entry.table_id) {
+                let row_count = nt.row_count();
+                let ts_count = nt.create_ts_len();
+                if row_count != ts_count as u64 {
+                    issues.push(format!(
+                        "WARNING: table '{}' has {} rows but {} MVCC timestamps",
+                        entry.name, row_count, ts_count
+                    ));
+                }
+            }
+        }
+
+        issues
+    }
 }
 
 // ── Checkpoint implementation ──────────────────────────────────
 
+/// Convert a Value to a Cypher literal string.
+fn value_to_cypher(v: &Value) -> String {
+    match v {
+        Value::Null => "null".to_string(),
+        Value::Bool(b) => format!("{}", b),
+        Value::Int(i) => format!("{}", i),
+        Value::Float(f) => format!("{}", f),
+        Value::String(s) => {
+            // Escape single quotes
+            let escaped = s.replace('\\', "\\\\").replace('\'', "\\'");
+            format!("'{}'", escaped)
+        }
+        Value::Date(d) => format!("date('{}')", d.format("%Y-%m-%d")),
+        Value::DateTime(dt) => format!("datetime('{}')", dt.format("%Y-%m-%dT%H:%M:%S")),
+        Value::Duration(ms) => format!("duration('PT{}S')", ms / 1000),
+        Value::List(items) => {
+            let inner: Vec<String> = items.iter().map(value_to_cypher).collect();
+            format!("[{}]", inner.join(", "))
+        }
+        Value::InternalId(id) => format!("{}", id),
+        Value::Bytes(_) => "'<bytes>'".to_string(),
+    }
+}
+
 /// Standalone checkpoint logic, callable from both Database::checkpoint and auto-checkpoint.
 fn checkpoint_impl(inner: &DatabaseInner) -> Result<(), GqliteError> {
+    let start = std::time::Instant::now();
     let mut wal_guard = inner.wal.lock();
     let wal = match wal_guard.as_mut() {
         Some(w) => w,
@@ -407,7 +704,11 @@ fn checkpoint_impl(inner: &DatabaseInner) -> Result<(), GqliteError> {
 
     let catalog_bytes = catalog.to_bytes()?;
     let page_size = pager.page_size() as usize;
-    let catalog_pages = (8 + catalog_bytes.len() + page_size - 1) / page_size;
+    let is_v2 = pager.header().version >= 2;
+    let usable_per_page =
+        if is_v2 { page_size - storage::format::PAGE_HEADER_SIZE } else { page_size };
+    let catalog_stream_len = 8 + catalog_bytes.len();
+    let catalog_pages = catalog_stream_len.div_ceil(usable_per_page);
     let storage_start = catalog_start + catalog_pages as u64;
 
     storage_guard.save_to(&mut pager, storage_start)?;
@@ -425,6 +726,7 @@ fn checkpoint_impl(inner: &DatabaseInner) -> Result<(), GqliteError> {
     std::fs::rename(&tmp_path, db_path)?;
     wal.clear()?;
 
+    info!("checkpoint completed ts={} elapsed={:?}", checkpoint_ts, start.elapsed());
     Ok(())
 }
 
@@ -448,12 +750,165 @@ impl Connection {
     /// Execute a script containing multiple semicolon-separated GQL statements.
     /// Returns the result of the last statement, or an empty result if no statements.
     /// Stops on the first error.
+    ///
+    /// Supports explicit transactions: `BEGIN; ...; COMMIT;` groups multiple
+    /// statements into a single atomic transaction. `ROLLBACK` discards all
+    /// changes since the last `BEGIN`.
     pub fn execute_script(&self, script: &str) -> Result<QueryResult, GqliteError> {
+        use crate::parser::ast::Statement as AstStatement;
+
         let stmts = Parser::parse_all(script)?;
         let mut last_result = QueryResult::empty();
+        let mut in_transaction = false;
+        let mut txn_stmts: Vec<&AstStatement> = Vec::new();
+
         for stmt in &stmts {
-            last_result = self.execute_statement(stmt, HashMap::new())?;
+            match stmt {
+                AstStatement::Begin => {
+                    if in_transaction {
+                        return Err(GqliteError::Execution("nested BEGIN is not allowed".into()));
+                    }
+                    in_transaction = true;
+                    txn_stmts.clear();
+                }
+                AstStatement::Commit => {
+                    if !in_transaction {
+                        return Err(GqliteError::Execution(
+                            "COMMIT without active transaction".into(),
+                        ));
+                    }
+                    // Execute all buffered statements in a single transaction
+                    last_result = self.execute_transaction_block(&txn_stmts)?;
+                    in_transaction = false;
+                    txn_stmts.clear();
+                }
+                AstStatement::Rollback => {
+                    if !in_transaction {
+                        return Err(GqliteError::Execution(
+                            "ROLLBACK without active transaction".into(),
+                        ));
+                    }
+                    // Discard all buffered statements
+                    in_transaction = false;
+                    txn_stmts.clear();
+                    last_result = QueryResult::empty();
+                }
+                _ => {
+                    if in_transaction {
+                        txn_stmts.push(stmt);
+                    } else {
+                        last_result = self.execute_statement(stmt, HashMap::new())?;
+                    }
+                }
+            }
         }
+
+        if in_transaction {
+            return Err(GqliteError::Execution(
+                "unterminated transaction: missing COMMIT or ROLLBACK".into(),
+            ));
+        }
+
+        Ok(last_result)
+    }
+
+    /// Execute multiple statements as a single atomic transaction.
+    ///
+    /// All statements are executed in a single write transaction. WAL records
+    /// are buffered and flushed atomically on commit. If any statement fails,
+    /// no WAL records are written (but in-memory storage may have been modified).
+    fn execute_transaction_block(
+        &self,
+        stmts: &[&crate::parser::ast::Statement],
+    ) -> Result<QueryResult, GqliteError> {
+        use crate::parser::ast::Statement as AstStatement;
+
+        if stmts.is_empty() {
+            return Ok(QueryResult::empty());
+        }
+
+        // Acquire write transaction
+        let (mut txn, _write_guard) = self.db.txn_manager.begin_read_write()?;
+        let txn_id = txn.id;
+        let mut engine = Engine::with_snapshot(txn.start_ts, HashMap::new());
+        engine.set_db(self.db.clone());
+        let mut last_result = QueryResult::empty();
+
+        for stmt in stmts {
+            // Handle CALL within transaction
+            if let AstStatement::Call { procedure, args, yields } = stmt {
+                match self.execute_call(procedure, args, yields, &HashMap::new()) {
+                    Ok(r) => {
+                        last_result = r;
+                        continue;
+                    }
+                    Err(e) => {
+                        self.db.txn_manager.rollback(&mut txn);
+                        return Err(e);
+                    }
+                }
+            }
+
+            // Bind + plan
+            let catalog = self.db.catalog.read().unwrap();
+            let mut binder = Binder::new(&catalog);
+            let bound = match binder.bind(stmt) {
+                Ok(b) => b,
+                Err(e) => {
+                    drop(catalog);
+                    self.db.txn_manager.rollback(&mut txn);
+                    return Err(e);
+                }
+            };
+            let planner = Planner::new(&catalog);
+            let logical = match planner.plan(&bound) {
+                Ok(l) => l,
+                Err(e) => {
+                    drop(catalog);
+                    self.db.txn_manager.rollback(&mut txn);
+                    return Err(e);
+                }
+            };
+            let logical = planner::optimizer::optimize(logical);
+            let physical = physical::to_physical(&logical);
+            drop(catalog);
+
+            if !physical.is_read_only() && self.db.config.read_only {
+                self.db.txn_manager.rollback(&mut txn);
+                return Err(GqliteError::Execution("database is opened in read-only mode".into()));
+            }
+
+            // Execute (both read and write ops go through the engine)
+            match engine.execute_plan(&physical, &self.db, txn_id) {
+                Ok(r) => {
+                    last_result = r;
+                }
+                Err(e) => {
+                    self.db.txn_manager.rollback(&mut txn);
+                    return Err(e);
+                }
+            }
+        }
+
+        // Flush all buffered WAL records + TxnCommit
+        let mut should_checkpoint = false;
+        {
+            let mut wal_guard = self.db.wal.lock();
+            if let Some(wal) = wal_guard.as_mut() {
+                for record in &engine.wal_buffer {
+                    wal.append(record)?;
+                }
+                wal.append(&WalRecord { txn_id, payload: WalPayload::TxnCommit })?;
+                should_checkpoint = self.db.config.auto_checkpoint
+                    && wal.record_count() >= self.db.config.checkpoint_threshold;
+            }
+        }
+        self.db.txn_manager.commit(&mut txn);
+        drop(_write_guard);
+        if should_checkpoint {
+            let _ = checkpoint_impl(&self.db);
+        }
+
         Ok(last_result)
     }
 
@@ -480,10 +935,52 @@ impl Connection {
             return self.execute_call(procedure, args, yields, &params);
         }
 
+        // Handle EXPLAIN — show execution plan without running the query
+        if let AstStatement::Explain(inner) = &stmt {
+            let catalog = self.db.catalog.read().unwrap();
+            let mut binder = Binder::new(&catalog);
+            let bound = binder.bind(inner)?;
+            let planner_inst = Planner::new(&catalog);
+            let logical = planner_inst.plan(&bound)?;
+            let logical = planner::optimizer::optimize(logical);
+            let physical = physical::to_physical(&logical);
+            drop(catalog);
+
+            let plan_text = physical.explain_text(0);
+            // Return the plan as a single-column result
+            let col = ColumnInfo { name: "plan".to_string(), data_type: DataType::String };
+            let rows: Vec<Row> = plan_text
+                .lines()
+                .filter(|l| !l.is_empty())
+                .map(|l| Row { values: vec![Value::String(l.to_string())] })
+                .collect();
+            return Ok(QueryResult::new(vec![col], rows));
+        }
+
+        // Handle transaction control statements.
+        // These are supported within execute_script (multi-statement mode).
+        // Single-statement execute() does not support explicit transactions.
+        match &stmt {
+            AstStatement::Begin => {
+                return Err(GqliteError::Execution(
+                    "BEGIN is only supported in execute_script() with multi-statement mode \
+                     (e.g., \"BEGIN; ...; COMMIT;\")"
+                        .into(),
+                ));
+            }
+            AstStatement::Commit => {
+                return Err(GqliteError::Execution("COMMIT without active transaction".into()));
+            }
+            AstStatement::Rollback => {
+                return Err(GqliteError::Execution("ROLLBACK without active transaction".into()));
+            }
+            _ => {}
+        }
+
         // 2. Bind
         let catalog = self.db.catalog.read().unwrap();
         let mut binder = Binder::new(&catalog);
-        let bound = binder.bind(&stmt)?;
+        let bound = binder.bind(stmt)?;
 
         // 3. Plan (logical) + optimize
         let planner = Planner::new(&catalog);
@@ -496,9 +993,7 @@ impl Connection {
 
         // 4b. Reject writes in read-only mode
         if !physical.is_read_only() && self.db.config.read_only {
-            return Err(GqliteError::Execution(
-                "database is opened in read-only mode".into(),
-            ));
+            return Err(GqliteError::Execution("database is opened in read-only mode".into()));
         }
 
         // 5. Auto-transaction + Execute
@@ -506,10 +1001,18 @@ impl Connection {
             let mut txn = self.db.txn_manager.begin_read_only();
             let mut engine = Engine::with_snapshot(txn.start_ts, params);
             engine.set_db(self.db.clone());
+            let start = std::time::Instant::now();
             let result = engine.execute_plan_parallel(&physical, &self.db, txn.id);
+            let elapsed = start.elapsed();
             match &result {
-                Ok(_) => self.db.txn_manager.commit(&mut txn),
-                Err(_) => self.db.txn_manager.rollback(&mut txn),
+                Ok(r) => {
+                    self.db.txn_manager.commit(&mut txn);
+                    debug!("query txn={} rows={} elapsed={:?}", txn.id, r.num_rows(), elapsed);
+                }
+                Err(e) => {
+                    self.db.txn_manager.rollback(&mut txn);
+                    debug!("query txn={} failed: {} elapsed={:?}", txn.id, e, elapsed);
+                }
             }
             result
         } else {
@@ -517,23 +1020,34 @@ impl Connection {
             let txn_id = txn.id;
             let mut engine = Engine::with_snapshot(txn.start_ts, params);
             engine.set_db(self.db.clone());
+            let start = std::time::Instant::now();
             let result = engine.execute_plan(&physical, &self.db, txn_id);
+            let elapsed = start.elapsed();
             let mut should_checkpoint = false;
             match &result {
                 Ok(_) => {
+                    // Flush buffered WAL records + TxnCommit atomically
                     let mut wal_guard = self.db.wal.lock();
                     if let Some(wal) = wal_guard.as_mut() {
-                        wal.append(&WalRecord {
-                            txn_id,
-                            payload: WalPayload::TxnCommit,
-                        })?;
+                        for record in &engine.wal_buffer {
+                            wal.append(record)?;
+                        }
+                        wal.append(&WalRecord { txn_id, payload: WalPayload::TxnCommit })?;
                         should_checkpoint = self.db.config.auto_checkpoint
                             && wal.record_count() >= self.db.config.checkpoint_threshold;
                     }
                     self.db.txn_manager.commit(&mut txn);
+                    debug!(
+                        "write txn={} committed wal_records={} elapsed={:?}",
+                        txn_id,
+                        engine.wal_buffer.len(),
+                        elapsed
+                    );
                 }
-                Err(_) => {
+                Err(e) => {
+                    // Discard buffered WAL records — no WAL writes for failed transactions
                     self.db.txn_manager.rollback(&mut txn);
+                    warn!("write txn={} rolled back: {} elapsed={:?}", txn_id, e, elapsed);
                 }
             }
             drop(_write_guard);
@@ -557,10 +1071,7 @@ impl Connection {
         let logical = planner::optimizer::optimize(logical);
         let physical = physical::to_physical(&logical);
 
-        Ok(PreparedStatement {
-            db: self.db.clone(),
-            plan: physical,
-        })
+        Ok(PreparedStatement { db: self.db.clone(), plan: physical })
     }
 
     /// Execute a query and return results (alias for execute).
@@ -578,14 +1089,9 @@ impl Connection {
     ) -> Result<QueryResult, GqliteError> {
         // Resolve the procedure from the registry
         let registry = procedure::registry::ProcedureRegistry::new();
-        let proc = registry
-            .get(procedure_name)
-            .ok_or_else(|| {
-                GqliteError::Execution(format!(
-                    "unknown procedure '{}'",
-                    procedure_name
-                ))
-            })?;
+        let proc = registry.get(procedure_name).ok_or_else(|| {
+            GqliteError::Execution(format!("unknown procedure '{}'", procedure_name))
+        })?;
 
         // Evaluate argument expressions to values
         let args: Vec<Value> = arg_exprs
@@ -602,48 +1108,34 @@ impl Connection {
             // Return all columns
             let columns: Vec<ColumnInfo> = all_columns
                 .iter()
-                .map(|name| ColumnInfo {
-                    name: name.clone(),
-                    data_type: DataType::String,
-                })
+                .map(|name| ColumnInfo { name: name.clone(), data_type: DataType::String })
                 .collect();
-            let rows: Vec<Row> = all_rows
-                .into_iter()
-                .map(|r| Row { values: r })
-                .collect();
+            let rows: Vec<Row> = all_rows.into_iter().map(|r| Row { values: r }).collect();
             Ok(QueryResult::new(columns, rows))
         } else {
             // Map YIELD column names to indices in the procedure output
             let yield_indices: Vec<usize> = yields
                 .iter()
                 .map(|y| {
-                    all_columns
-                        .iter()
-                        .position(|c| c == y)
-                        .ok_or_else(|| {
-                            GqliteError::Execution(format!(
-                                "procedure '{}' does not output column '{}'",
-                                procedure_name, y
-                            ))
-                        })
+                    all_columns.iter().position(|c| c == y).ok_or_else(|| {
+                        GqliteError::Execution(format!(
+                            "procedure '{}' does not output column '{}'",
+                            procedure_name, y
+                        ))
+                    })
                 })
                 .collect::<Result<Vec<_>, _>>()?;
 
             let columns: Vec<ColumnInfo> = yields
                 .iter()
-                .map(|name| ColumnInfo {
-                    name: name.clone(),
-                    data_type: DataType::String,
-                })
+                .map(|name| ColumnInfo { name: name.clone(), data_type: DataType::String })
                 .collect();
 
             let rows: Vec<Row> = all_rows
                 .into_iter()
                 .map(|row| {
-                    let values: Vec<Value> = yield_indices
-                        .iter()
-                        .map(|&idx| row[idx].clone())
-                        .collect();
+                    let values: Vec<Value> =
+                        yield_indices.iter().map(|&idx| row[idx].clone()).collect();
                     Row { values }
                 })
                 .collect();
@@ -666,14 +1158,11 @@ impl Connection {
             Expr::StringLit(s) => Ok(Value::String(s.clone())),
             Expr::BoolLit(b) => Ok(Value::Bool(*b)),
             Expr::NullLit => Ok(Value::Null),
-            Expr::Param(name) => {
-                params.get(name).cloned().ok_or_else(|| {
-                    GqliteError::Execution(format!("parameter '{}' not found", name))
-                })
-            }
-            _ => Err(GqliteError::Execution(
-                "unsupported expression in CALL arguments".into(),
-            )),
+            Expr::Param(name) => params
+                .get(name)
+                .cloned()
+                .ok_or_else(|| GqliteError::Execution(format!("parameter '{}' not found", name))),
+            _ => Err(GqliteError::Execution("unsupported expression in CALL arguments".into())),
         }
     }
 }
@@ -715,10 +1204,7 @@ impl PreparedStatement {
                 Ok(_) => {
                     let mut wal_guard = self.db.wal.lock();
                     if let Some(wal) = wal_guard.as_mut() {
-                        wal.append(&WalRecord {
-                            txn_id,
-                            payload: WalPayload::TxnCommit,
-                        })?;
+                        wal.append(&WalRecord { txn_id, payload: WalPayload::TxnCommit })?;
                         should_checkpoint = self.db.config.auto_checkpoint
                             && wal.record_count() >= self.db.config.checkpoint_threshold;
                     }
@@ -811,20 +1297,12 @@ pub struct QueryResult {
 impl QueryResult {
     /// Create a new QueryResult.
     pub fn new(columns: Vec<ColumnInfo>, rows: Vec<Row>) -> Self {
-        Self {
-            columns,
-            rows,
-            cursor: 0,
-        }
+        Self { columns, rows, cursor: 0 }
     }
 
     /// Create an empty result (for DDL operations).
     pub fn empty() -> Self {
-        Self {
-            columns: Vec::new(),
-            rows: Vec::new(),
-            cursor: 0,
-        }
+        Self { columns: Vec::new(), rows: Vec::new(), cursor: 0 }
     }
 
     /// Number of rows.

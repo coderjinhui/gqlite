@@ -24,8 +24,7 @@ fn persistence_roundtrip() {
     // Phase 1: Create schema and insert data
     {
         let db = Database::open(&path).unwrap();
-        db.execute("CREATE NODE TABLE Person(id INT64, name STRING, PRIMARY KEY(id))")
-            .unwrap();
+        db.execute("CREATE NODE TABLE Person(id INT64, name STRING, PRIMARY KEY(id))").unwrap();
         db.execute("CREATE (p:Person {id: 1, name: 'Alice'})").unwrap();
         db.execute("CREATE (p:Person {id: 2, name: 'Bob'})").unwrap();
         // db goes out of scope — WAL is flushed
@@ -54,10 +53,8 @@ fn persistence_with_relationships() {
     // Phase 1: Create schema, nodes, and relationships
     {
         let db = Database::open(&path).unwrap();
-        db.execute("CREATE NODE TABLE Person(id INT64, name STRING, PRIMARY KEY(id))")
-            .unwrap();
-        db.execute("CREATE REL TABLE KNOWS(FROM Person TO Person)")
-            .unwrap();
+        db.execute("CREATE NODE TABLE Person(id INT64, name STRING, PRIMARY KEY(id))").unwrap();
+        db.execute("CREATE REL TABLE KNOWS(FROM Person TO Person)").unwrap();
         db.execute("CREATE (p:Person {id: 1, name: 'Alice'})").unwrap();
         db.execute("CREATE (p:Person {id: 2, name: 'Bob'})").unwrap();
         db.execute("CREATE (p:Person {id: 3, name: 'Charlie'})").unwrap();
@@ -80,9 +77,8 @@ fn persistence_with_relationships() {
         assert_eq!(result.num_rows(), 3);
 
         // Relationships survived
-        let result = db
-            .query("MATCH (a:Person)-[:KNOWS]->(b:Person) RETURN a.name, b.name")
-            .unwrap();
+        let result =
+            db.query("MATCH (a:Person)-[:KNOWS]->(b:Person) RETURN a.name, b.name").unwrap();
         assert_eq!(result.num_rows(), 2);
     }
 
@@ -97,8 +93,7 @@ fn persistence_after_checkpoint() {
     // Phase 1: Create data and checkpoint
     {
         let db = Database::open(&path).unwrap();
-        db.execute("CREATE NODE TABLE Person(id INT64, name STRING, PRIMARY KEY(id))")
-            .unwrap();
+        db.execute("CREATE NODE TABLE Person(id INT64, name STRING, PRIMARY KEY(id))").unwrap();
         db.execute("CREATE (p:Person {id: 1, name: 'Alice'})").unwrap();
         db.execute("CREATE (p:Person {id: 2, name: 'Bob'})").unwrap();
 
@@ -124,8 +119,7 @@ fn persistence_multiple_sessions() {
     // Session 1: Create schema
     {
         let db = Database::open(&path).unwrap();
-        db.execute("CREATE NODE TABLE Person(id INT64, name STRING, PRIMARY KEY(id))")
-            .unwrap();
+        db.execute("CREATE NODE TABLE Person(id INT64, name STRING, PRIMARY KEY(id))").unwrap();
         db.execute("CREATE (p:Person {id: 1, name: 'Alice'})").unwrap();
     }
 
@@ -148,8 +142,7 @@ fn persistence_multiple_sessions() {
 #[test]
 fn in_memory_database_no_file() {
     let db = Database::in_memory();
-    db.execute("CREATE NODE TABLE Person(id INT64, name STRING, PRIMARY KEY(id))")
-        .unwrap();
+    db.execute("CREATE NODE TABLE Person(id INT64, name STRING, PRIMARY KEY(id))").unwrap();
     db.execute("CREATE (p:Person {id: 1, name: 'Alice'})").unwrap();
 
     let result = db.query("MATCH (p:Person) RETURN p.name").unwrap();
@@ -164,8 +157,7 @@ fn checkpoint_creates_main_file() {
 
     {
         let db = Database::open(&path).unwrap();
-        db.execute("CREATE NODE TABLE Person(id INT64, name STRING, PRIMARY KEY(id))")
-            .unwrap();
+        db.execute("CREATE NODE TABLE Person(id INT64, name STRING, PRIMARY KEY(id))").unwrap();
         db.execute("CREATE (p:Person {id: 1, name: 'Alice'})").unwrap();
         db.checkpoint().unwrap();
 
@@ -184,8 +176,7 @@ fn recovery_from_main_file_only() {
     // Phase 1: Create data and checkpoint
     {
         let db = Database::open(&path).unwrap();
-        db.execute("CREATE NODE TABLE Person(id INT64, name STRING, PRIMARY KEY(id))")
-            .unwrap();
+        db.execute("CREATE NODE TABLE Person(id INT64, name STRING, PRIMARY KEY(id))").unwrap();
         db.execute("CREATE (p:Person {id: 1, name: 'Alice'})").unwrap();
         db.execute("CREATE (p:Person {id: 2, name: 'Bob'})").unwrap();
         db.checkpoint().unwrap();
@@ -218,8 +209,7 @@ fn recovery_main_file_plus_incremental_wal() {
     // Phase 1: Create initial data and checkpoint
     {
         let db = Database::open(&path).unwrap();
-        db.execute("CREATE NODE TABLE Person(id INT64, name STRING, PRIMARY KEY(id))")
-            .unwrap();
+        db.execute("CREATE NODE TABLE Person(id INT64, name STRING, PRIMARY KEY(id))").unwrap();
         db.execute("CREATE (p:Person {id: 1, name: 'Alice'})").unwrap();
         db.checkpoint().unwrap();
 
@@ -252,8 +242,7 @@ fn multiple_checkpoints() {
     // Round 1: Create + checkpoint
     {
         let db = Database::open(&path).unwrap();
-        db.execute("CREATE NODE TABLE Person(id INT64, name STRING, PRIMARY KEY(id))")
-            .unwrap();
+        db.execute("CREATE NODE TABLE Person(id INT64, name STRING, PRIMARY KEY(id))").unwrap();
         db.execute("CREATE (p:Person {id: 1, name: 'Alice'})").unwrap();
         db.checkpoint().unwrap();
     }
@@ -296,10 +285,8 @@ fn checkpoint_with_relationships() {
     // Phase 1: Create nodes + relationships, then checkpoint
     {
         let db = Database::open(&path).unwrap();
-        db.execute("CREATE NODE TABLE Person(id INT64, name STRING, PRIMARY KEY(id))")
-            .unwrap();
-        db.execute("CREATE REL TABLE KNOWS(FROM Person TO Person)")
-            .unwrap();
+        db.execute("CREATE NODE TABLE Person(id INT64, name STRING, PRIMARY KEY(id))").unwrap();
+        db.execute("CREATE REL TABLE KNOWS(FROM Person TO Person)").unwrap();
         db.execute("CREATE (p:Person {id: 1, name: 'Alice'})").unwrap();
         db.execute("CREATE (p:Person {id: 2, name: 'Bob'})").unwrap();
         db.execute("CREATE (p:Person {id: 3, name: 'Charlie'})").unwrap();
@@ -325,9 +312,8 @@ fn checkpoint_with_relationships() {
         let result = db.query("MATCH (p:Person) RETURN p.id").unwrap();
         assert_eq!(result.num_rows(), 3);
 
-        let result = db
-            .query("MATCH (a:Person)-[:KNOWS]->(b:Person) RETURN a.name, b.name")
-            .unwrap();
+        let result =
+            db.query("MATCH (a:Person)-[:KNOWS]->(b:Person) RETURN a.name, b.name").unwrap();
         assert_eq!(result.num_rows(), 2);
     }
 
@@ -342,19 +328,14 @@ fn auto_checkpoint_triggers() {
     cleanup(&path);
 
     // Use a very low threshold to trigger auto-checkpoint
-    let config = DatabaseConfig {
-        checkpoint_threshold: 5,
-        ..DatabaseConfig::default()
-    };
+    let config = DatabaseConfig { checkpoint_threshold: 5, ..DatabaseConfig::default() };
 
     {
         let db = Database::open_with_config(&path, config).unwrap();
-        db.execute("CREATE NODE TABLE Person(id INT64, name STRING, PRIMARY KEY(id))")
-            .unwrap();
+        db.execute("CREATE NODE TABLE Person(id INT64, name STRING, PRIMARY KEY(id))").unwrap();
         // Insert enough rows to exceed threshold (each INSERT = multiple WAL records)
         for i in 1..=10 {
-            db.execute(&format!("CREATE (p:Person {{id: {}, name: 'P{}'}})", i, i))
-                .unwrap();
+            db.execute(&format!("CREATE (p:Person {{id: {}, name: 'P{}'}})", i, i)).unwrap();
         }
         // Auto-checkpoint should have created .graph file
         assert!(path.exists(), ".graph should exist after auto-checkpoint");
@@ -367,10 +348,7 @@ fn auto_checkpoint_triggers() {
     {
         let db = Database::open(&path).unwrap();
         let result = db.query("MATCH (p:Person) RETURN p.id").unwrap();
-        assert!(
-            result.num_rows() > 0,
-            "data should survive via .graph after auto-checkpoint"
-        );
+        assert!(result.num_rows() > 0, "data should survive via .graph after auto-checkpoint");
     }
 
     cleanup(&path);
