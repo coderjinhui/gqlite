@@ -27,11 +27,8 @@ fn n01_unfollow_and_block() {
 
     // 创建 5 个用户
     for (id, name) in [(1, "Alice"), (2, "Bob"), (3, "Carol"), (4, "Dave"), (5, "Eve")] {
-        db.execute(&format!(
-            "CREATE (p:Person {{id: {}, name: '{}', age: 25}})",
-            id, name
-        ))
-        .unwrap();
+        db.execute(&format!("CREATE (p:Person {{id: {}, name: '{}', age: 25}})", id, name))
+            .unwrap();
     }
 
     // 初始关注关系:
@@ -107,9 +104,8 @@ fn n01_unfollow_and_block() {
     assert_eq!(r2.rows()[1].get_string(0).unwrap(), "Carol");
 
     // 验证 BLOCKS 存在
-    let blocks = db
-        .query("MATCH (a:Person)-[:BLOCKS]->(b:Person) WHERE a.id = 1 RETURN b.name")
-        .unwrap();
+    let blocks =
+        db.query("MATCH (a:Person)-[:BLOCKS]->(b:Person) WHERE a.id = 1 RETURN b.name").unwrap();
     assert_eq!(blocks.num_rows(), 1);
     assert_eq!(blocks.rows()[0].get_string(0).unwrap(), "Dave");
 
@@ -150,10 +146,8 @@ fn n02_interaction_edge_properties() {
     )
     .unwrap();
     // 中间节点建模: LikeAction / CommentAction 携带可查询属性
-    db.execute(
-        "CREATE NODE TABLE LikeAction(id INT64, ts INT64, source STRING, PRIMARY KEY(id))",
-    )
-    .unwrap();
+    db.execute("CREATE NODE TABLE LikeAction(id INT64, ts INT64, source STRING, PRIMARY KEY(id))")
+        .unwrap();
     db.execute(
         "CREATE NODE TABLE CommentAction(id INT64, ts INT64, sentiment STRING, \
          text STRING, PRIMARY KEY(id))",
@@ -166,11 +160,8 @@ fn n02_interaction_edge_properties() {
 
     // 创建用户
     for (id, name) in [(1, "Alice"), (2, "Bob"), (3, "Carol"), (4, "Dave")] {
-        db.execute(&format!(
-            "CREATE (p:Person {{id: {}, name: '{}', age: 25}})",
-            id, name
-        ))
-        .unwrap();
+        db.execute(&format!("CREATE (p:Person {{id: {}, name: '{}', age: 25}})", id, name))
+            .unwrap();
     }
 
     // 创建帖子
@@ -178,10 +169,8 @@ fn n02_interaction_edge_properties() {
         "CREATE (p:Post {id: 1, title: 'Rust Tips', content: 'Ownership', created_at: 1000})",
     )
     .unwrap();
-    db.execute(
-        "CREATE (p:Post {id: 2, title: 'Graph DB', content: 'Edges', created_at: 1000})",
-    )
-    .unwrap();
+    db.execute("CREATE (p:Post {id: 2, title: 'Graph DB', content: 'Edges', created_at: 1000})")
+        .unwrap();
 
     // 创建 Like 事件, 带时间戳和来源
     // 时间窗口 [1000, 2000]: likes 1,2,3,4
@@ -274,10 +263,7 @@ fn n02_interaction_edge_properties() {
         .unwrap();
     let mut source_counts: HashMap<String, i64> = HashMap::new();
     for row in by_source.rows() {
-        source_counts.insert(
-            row.get_string(0).unwrap().to_string(),
-            row.get_int(1).unwrap(),
-        );
+        source_counts.insert(row.get_string(0).unwrap().to_string(), row.get_int(1).unwrap());
     }
     assert_eq!(source_counts["web"], 3);
     assert_eq!(source_counts["mobile"], 3);
@@ -292,10 +278,7 @@ fn n02_interaction_edge_properties() {
         .unwrap();
     let mut sent_counts: HashMap<String, i64> = HashMap::new();
     for row in by_sentiment.rows() {
-        sent_counts.insert(
-            row.get_string(0).unwrap().to_string(),
-            row.get_int(1).unwrap(),
-        );
+        sent_counts.insert(row.get_string(0).unwrap().to_string(), row.get_int(1).unwrap());
     }
     assert_eq!(sent_counts["positive"], 1);
     assert_eq!(sent_counts["neutral"], 1);
@@ -325,11 +308,8 @@ fn n03_feed_candidate_generation() {
 
     // 用户: Alice(1), Bob(2), Carol(3), Dave(4, 被屏蔽)
     for (id, name) in [(1, "Alice"), (2, "Bob"), (3, "Carol"), (4, "Dave")] {
-        db.execute(&format!(
-            "CREATE (p:Person {{id: {}, name: '{}', age: 25}})",
-            id, name
-        ))
-        .unwrap();
+        db.execute(&format!("CREATE (p:Person {{id: {}, name: '{}', age: 25}})", id, name))
+            .unwrap();
     }
 
     // 标签
@@ -403,11 +383,8 @@ fn n03_feed_candidate_generation() {
              RETURN post.id, post.title ORDER BY post.id",
         )
         .unwrap();
-    let author_post_ids: Vec<i64> = feed_by_author
-        .rows()
-        .iter()
-        .map(|r| r.get_int(0).unwrap())
-        .collect();
+    let author_post_ids: Vec<i64> =
+        feed_by_author.rows().iter().map(|r| r.get_int(0).unwrap()).collect();
     assert_eq!(author_post_ids, vec![1, 2, 3]);
 
     // Feed 候选2: 关注标签的帖子, 排除被屏蔽用户
@@ -423,14 +400,8 @@ fn n03_feed_candidate_generation() {
     assert_eq!(feed_by_tag.rows()[0].get_int(0).unwrap(), 1);
 
     // 被屏蔽用户的帖子不应出现在 feed 中
-    assert!(
-        !author_post_ids.contains(&4),
-        "Blocked user's post 4 should not appear in feed"
-    );
-    assert!(
-        !author_post_ids.contains(&5),
-        "Blocked user's post 5 should not appear in feed"
-    );
+    assert!(!author_post_ids.contains(&4), "Blocked user's post 4 should not appear in feed");
+    assert!(!author_post_ids.contains(&5), "Blocked user's post 5 should not appear in feed");
 }
 
 // ════════════════════════════════════════════════════════════════
@@ -480,11 +451,8 @@ fn n04_hot_content_high_fanout() {
 
     // 创建 550 个用户
     for i in 1..=550 {
-        db.execute(&format!(
-            "CREATE (p:Person {{id: {}, name: 'user{}', age: 20}})",
-            i, i
-        ))
-        .unwrap();
+        db.execute(&format!("CREATE (p:Person {{id: {}, name: 'user{}', age: 20}})", i, i))
+            .unwrap();
     }
 
     // Hot Post: 550 likes, Normal: 10 likes, Cold: 2 likes
@@ -547,10 +515,7 @@ fn n04_hot_content_high_fanout() {
         .unwrap();
     let mut tag_counts: HashMap<String, i64> = HashMap::new();
     for row in tag_stats.rows() {
-        tag_counts.insert(
-            row.get_string(0).unwrap().to_string(),
-            row.get_int(1).unwrap(),
-        );
+        tag_counts.insert(row.get_string(0).unwrap().to_string(), row.get_int(1).unwrap());
     }
     // Tech: Normal(10) + Hot(550) = 560
     assert_eq!(tag_counts["Tech"], 560);
@@ -572,26 +537,16 @@ fn n05_group_community_graph() {
          created_at INT64, PRIMARY KEY(id))",
     )
     .unwrap();
-    db.execute("CREATE NODE TABLE SocialGroup(id INT64, name STRING, PRIMARY KEY(id))")
-        .unwrap();
+    db.execute("CREATE NODE TABLE SocialGroup(id INT64, name STRING, PRIMARY KEY(id))").unwrap();
     db.execute("CREATE REL TABLE MEMBER_OF(FROM Person TO SocialGroup)").unwrap();
     db.execute("CREATE REL TABLE ADMIN_OF(FROM Person TO SocialGroup)").unwrap();
     db.execute("CREATE REL TABLE POSTED(FROM Person TO Post)").unwrap();
     db.execute("CREATE REL TABLE POSTED_IN(FROM Post TO SocialGroup)").unwrap();
 
     // 用户
-    for (id, name) in [
-        (1, "Alice"),
-        (2, "Bob"),
-        (3, "Carol"),
-        (4, "Dave"),
-        (5, "Eve"),
-    ] {
-        db.execute(&format!(
-            "CREATE (p:Person {{id: {}, name: '{}', age: 25}})",
-            id, name
-        ))
-        .unwrap();
+    for (id, name) in [(1, "Alice"), (2, "Bob"), (3, "Carol"), (4, "Dave"), (5, "Eve")] {
+        db.execute(&format!("CREATE (p:Person {{id: {}, name: '{}', age: 25}})", id, name))
+            .unwrap();
     }
 
     // 群组
@@ -632,7 +587,9 @@ fn n05_group_community_graph() {
     for (pid, postid, title, gid) in posts_data {
         db.execute(&format!(
             "CREATE (p:Post {{id: {}, title: '{}', content: 'content', created_at: {}}})",
-            postid, title, postid * 1000
+            postid,
+            title,
+            postid * 1000
         ))
         .unwrap();
         db.execute(&format!(
@@ -658,10 +615,7 @@ fn n05_group_community_graph() {
         .unwrap();
     let mut mc: HashMap<String, i64> = HashMap::new();
     for row in member_counts.rows() {
-        mc.insert(
-            row.get_string(0).unwrap().to_string(),
-            row.get_int(1).unwrap(),
-        );
+        mc.insert(row.get_string(0).unwrap().to_string(), row.get_int(1).unwrap());
     }
     assert_eq!(mc["Rust Devs"], 4);
     assert_eq!(mc["Graph Fans"], 3);
@@ -694,10 +648,8 @@ fn n05_group_community_graph() {
     assert_eq!(admins.num_rows(), 2);
     let mut admin_map: HashMap<String, String> = HashMap::new();
     for row in admins.rows() {
-        admin_map.insert(
-            row.get_string(0).unwrap().to_string(),
-            row.get_string(1).unwrap().to_string(),
-        );
+        admin_map
+            .insert(row.get_string(0).unwrap().to_string(), row.get_string(1).unwrap().to_string());
     }
     assert_eq!(admin_map["Rust Devs"], "Alice");
     assert_eq!(admin_map["Graph Fans"], "Bob");
@@ -711,11 +663,7 @@ fn n05_group_community_graph() {
         )
         .unwrap();
     assert_eq!(common_groups.num_rows(), 2);
-    let gnames: Vec<&str> = common_groups
-        .rows()
-        .iter()
-        .map(|r| r.get_string(0).unwrap())
-        .collect();
+    let gnames: Vec<&str> = common_groups.rows().iter().map(|r| r.get_string(0).unwrap()).collect();
     assert!(gnames.contains(&"Graph Fans"));
     assert!(gnames.contains(&"Rust Devs"));
 
@@ -728,10 +676,7 @@ fn n05_group_community_graph() {
         .unwrap();
     let mut gp: HashMap<String, i64> = HashMap::new();
     for row in group_posts.rows() {
-        gp.insert(
-            row.get_string(0).unwrap().to_string(),
-            row.get_int(1).unwrap(),
-        );
+        gp.insert(row.get_string(0).unwrap().to_string(), row.get_int(1).unwrap());
     }
     assert_eq!(gp["Rust Devs"], 4);
     assert_eq!(gp["Graph Fans"], 2);
@@ -761,11 +706,8 @@ fn n06_multi_layer_interaction_chain() {
 
     // 用户
     for (id, name) in [(1, "Alice"), (2, "Bob"), (3, "Carol"), (4, "Dave")] {
-        db.execute(&format!(
-            "CREATE (p:Person {{id: {}, name: '{}', age: 25}})",
-            id, name
-        ))
-        .unwrap();
+        db.execute(&format!("CREATE (p:Person {{id: {}, name: '{}', age: 25}})", id, name))
+            .unwrap();
     }
 
     // Alice 发帖
@@ -793,10 +735,8 @@ fn n06_multi_layer_interaction_chain() {
     .unwrap();
 
     // Carol 回复 Bob (Comment 2), 提及 Alice
-    db.execute(
-        "CREATE (c:Comment {id: 2, text: 'I agree with Bob, @Alice nailed it', ts: 3000})",
-    )
-    .unwrap();
+    db.execute("CREATE (c:Comment {id: 2, text: 'I agree with Bob, @Alice nailed it', ts: 3000})")
+        .unwrap();
     db.execute(
         "MATCH (p:Person), (c:Comment) WHERE p.id = 3 AND c.id = 2 \
          CREATE (p)-[:COMMENTED]->(c)",
@@ -853,10 +793,7 @@ fn n06_multi_layer_interaction_chain() {
         )
         .unwrap();
     assert_eq!(direct_comments.num_rows(), 1);
-    assert_eq!(
-        direct_comments.rows()[0].get_string(0).unwrap(),
-        "Great article!"
-    );
+    assert_eq!(direct_comments.rows()[0].get_string(0).unwrap(), "Great article!");
 
     // 断言2: 三级回复链 Comment3 -> Comment2 -> Comment1
     let reply_chain = db
@@ -867,18 +804,9 @@ fn n06_multi_layer_interaction_chain() {
         )
         .unwrap();
     assert_eq!(reply_chain.num_rows(), 1);
-    assert_eq!(
-        reply_chain.rows()[0].get_string(0).unwrap(),
-        "Good point @Bob"
-    );
-    assert_eq!(
-        reply_chain.rows()[0].get_string(1).unwrap(),
-        "I agree with Bob, @Alice nailed it"
-    );
-    assert_eq!(
-        reply_chain.rows()[0].get_string(2).unwrap(),
-        "Great article!"
-    );
+    assert_eq!(reply_chain.rows()[0].get_string(0).unwrap(), "Good point @Bob");
+    assert_eq!(reply_chain.rows()[0].get_string(1).unwrap(), "I agree with Bob, @Alice nailed it");
+    assert_eq!(reply_chain.rows()[0].get_string(2).unwrap(), "Great article!");
 
     // 断言3: 完整 Person->Post->Comment->Reply->Reply 链
     let full_chain = db
@@ -891,10 +819,7 @@ fn n06_multi_layer_interaction_chain() {
         .unwrap();
     assert_eq!(full_chain.num_rows(), 1);
     assert_eq!(full_chain.rows()[0].get_string(0).unwrap(), "Alice");
-    assert_eq!(
-        full_chain.rows()[0].get_string(1).unwrap(),
-        "Rust Ownership"
-    );
+    assert_eq!(full_chain.rows()[0].get_string(1).unwrap(), "Rust Ownership");
 
     // 断言4: 谁被提及了
     let mentioned = db
@@ -948,11 +873,8 @@ fn n07_content_delete_cascade() {
 
     // 用户
     for (id, name) in [(1, "Alice"), (2, "Bob"), (3, "Carol")] {
-        db.execute(&format!(
-            "CREATE (p:Person {{id: {}, name: '{}', age: 25}})",
-            id, name
-        ))
-        .unwrap();
+        db.execute(&format!("CREATE (p:Person {{id: {}, name: '{}', age: 25}})", id, name))
+            .unwrap();
     }
 
     // 帖子
@@ -1020,17 +942,12 @@ fn n07_content_delete_cascade() {
     }
 
     // 删除前验证
-    let pre_likes = db
-        .query("MATCH (p:Person)-[:LIKED]->(post:Post) RETURN count(p)")
-        .unwrap();
+    let pre_likes = db.query("MATCH (p:Person)-[:LIKED]->(post:Post) RETURN count(p)").unwrap();
     assert_eq!(pre_likes.rows()[0].get_int(0).unwrap(), 3);
-    let pre_tags = db
-        .query("MATCH (post:Post)-[:HAS_TAG]->(t:Tag) RETURN count(t)")
-        .unwrap();
+    let pre_tags = db.query("MATCH (post:Post)-[:HAS_TAG]->(t:Tag) RETURN count(t)").unwrap();
     assert_eq!(pre_tags.rows()[0].get_int(0).unwrap(), 3);
-    let pre_comments = db
-        .query("MATCH (c:Comment)-[:COMMENT_ON]->(post:Post) RETURN count(c)")
-        .unwrap();
+    let pre_comments =
+        db.query("MATCH (c:Comment)-[:COMMENT_ON]->(post:Post) RETURN count(c)").unwrap();
     assert_eq!(pre_comments.rows()[0].get_int(0).unwrap(), 2);
 
     // DETACH DELETE Post1
@@ -1045,27 +962,20 @@ fn n07_content_delete_cascade() {
     assert_eq!(post2.num_rows(), 1);
 
     // 断言3: LIKED 只剩 Post2 的 1 条
-    let post_likes = db
-        .query("MATCH (p:Person)-[:LIKED]->(post:Post) RETURN count(p)")
-        .unwrap();
+    let post_likes = db.query("MATCH (p:Person)-[:LIKED]->(post:Post) RETURN count(p)").unwrap();
     assert_eq!(post_likes.rows()[0].get_int(0).unwrap(), 1);
 
     // 断言4: HAS_TAG 只剩 Post2 的 1 条
-    let post_tags = db
-        .query("MATCH (post:Post)-[:HAS_TAG]->(t:Tag) RETURN count(t)")
-        .unwrap();
+    let post_tags = db.query("MATCH (post:Post)-[:HAS_TAG]->(t:Tag) RETURN count(t)").unwrap();
     assert_eq!(post_tags.rows()[0].get_int(0).unwrap(), 1);
 
     // 断言5: COMMENT_ON 全部删除 (都指向 Post1)
-    let post_comments = db
-        .query("MATCH (c:Comment)-[:COMMENT_ON]->(post:Post) RETURN count(c)")
-        .unwrap();
+    let post_comments =
+        db.query("MATCH (c:Comment)-[:COMMENT_ON]->(post:Post) RETURN count(c)").unwrap();
     assert_eq!(post_comments.rows()[0].get_int(0).unwrap(), 0);
 
     // 断言6: POSTED 只剩 Post2 的 1 条
-    let posted = db
-        .query("MATCH (p:Person)-[:POSTED]->(post:Post) RETURN count(post)")
-        .unwrap();
+    let posted = db.query("MATCH (p:Person)-[:POSTED]->(post:Post) RETURN count(post)").unwrap();
     assert_eq!(posted.rows()[0].get_int(0).unwrap(), 1);
 
     // 断言7: Tag 节点本身未被删除
@@ -1092,18 +1002,14 @@ fn n08_like_unlike_relike_event_replay() {
     )
     .unwrap();
     // 使用 LikeEvent 节点建模, 便于单独删除
-    db.execute(
-        "CREATE NODE TABLE LikeEvent(id INT64, ts INT64, active INT64, PRIMARY KEY(id))",
-    )
-    .unwrap();
+    db.execute("CREATE NODE TABLE LikeEvent(id INT64, ts INT64, active INT64, PRIMARY KEY(id))")
+        .unwrap();
     db.execute("CREATE REL TABLE GAVE_LIKE(FROM Person TO LikeEvent)").unwrap();
     db.execute("CREATE REL TABLE LIKE_ON(FROM LikeEvent TO Post)").unwrap();
 
     db.execute("CREATE (p:Person {id: 1, name: 'Alice', age: 25})").unwrap();
-    db.execute(
-        "CREATE (p:Post {id: 1, title: 'Test Post', content: 'Content', created_at: 1000})",
-    )
-    .unwrap();
+    db.execute("CREATE (p:Post {id: 1, title: 'Test Post', content: 'Content', created_at: 1000})")
+        .unwrap();
 
     // 事件1: Alice 点赞 (ts=1000)
     db.execute("CREATE (l:LikeEvent {id: 1, ts: 1000, active: 1})").unwrap();
@@ -1182,18 +1088,9 @@ fn n09_fof_recommendation() {
     db.execute("CREATE REL TABLE BLOCKS(FROM Person TO Person)").unwrap();
 
     // Alice(1), Bob(2), Carol(3), Dave(4), Eve(5)
-    for (id, name) in [
-        (1, "Alice"),
-        (2, "Bob"),
-        (3, "Carol"),
-        (4, "Dave"),
-        (5, "Eve"),
-    ] {
-        db.execute(&format!(
-            "CREATE (p:Person {{id: {}, name: '{}', age: 25}})",
-            id, name
-        ))
-        .unwrap();
+    for (id, name) in [(1, "Alice"), (2, "Bob"), (3, "Carol"), (4, "Dave"), (5, "Eve")] {
+        db.execute(&format!("CREATE (p:Person {{id: {}, name: '{}', age: 25}})", id, name))
+            .unwrap();
     }
 
     // Alice->Bob, Alice->Carol
@@ -1272,10 +1169,8 @@ fn n10_viral_content_detection() {
     )
     .unwrap();
     // LikeAction 中间节点（带 ts）支持时间窗口过滤
-    db.execute(
-        "CREATE NODE TABLE LikeAction(id INT64, ts INT64, source STRING, PRIMARY KEY(id))",
-    )
-    .unwrap();
+    db.execute("CREATE NODE TABLE LikeAction(id INT64, ts INT64, source STRING, PRIMARY KEY(id))")
+        .unwrap();
     db.execute("CREATE REL TABLE GAVE_LIKE(FROM Person TO LikeAction)").unwrap();
     db.execute("CREATE REL TABLE LIKE_ON(FROM LikeAction TO Post)").unwrap();
 
@@ -1291,11 +1186,7 @@ fn n10_viral_content_detection() {
 
     // 用户
     for i in 1..=8 {
-        db.execute(&format!(
-            "CREATE (p:Person {{id: {}, name: 'u{}', age: 20}})",
-            i, i
-        ))
-        .unwrap();
+        db.execute(&format!("CREATE (p:Person {{id: {}, name: 'u{}', age: 20}})", i, i)).unwrap();
     }
 
     // Normal post: 分散互动 u1@1100, u2@2100, u3@3100
@@ -1320,13 +1211,9 @@ fn n10_viral_content_detection() {
     }
 
     // Viral post: 短时间爆发 [1100,1140]
-    for (like_id, person_id, ts) in [
-        (10, 4, 1100),
-        (11, 5, 1110),
-        (12, 6, 1120),
-        (13, 7, 1130),
-        (14, 8, 1140),
-    ] {
+    for (like_id, person_id, ts) in
+        [(10, 4, 1100), (11, 5, 1110), (12, 6, 1120), (13, 7, 1130), (14, 8, 1140)]
+    {
         db.execute(&format!(
             "CREATE (l:LikeAction {{id: {}, ts: {}, source: 'web'}})",
             like_id, ts
@@ -1379,10 +1266,7 @@ fn n10_viral_content_detection() {
         .unwrap();
     let mut total_map: HashMap<String, i64> = HashMap::new();
     for row in total_counts.rows() {
-        total_map.insert(
-            row.get_string(0).unwrap().to_string(),
-            row.get_int(1).unwrap(),
-        );
+        total_map.insert(row.get_string(0).unwrap().to_string(), row.get_int(1).unwrap());
     }
     assert_eq!(total_map["Normal Post"], 3);
     assert_eq!(total_map["Viral Post"], 5);
@@ -1410,8 +1294,7 @@ fn n11_dm_conversation_thread() {
     let db = Database::in_memory();
     db.execute("CREATE NODE TABLE Person(id INT64, name STRING, age INT64, PRIMARY KEY(id))")
         .unwrap();
-    db.execute("CREATE NODE TABLE Conversation(id INT64, title STRING, PRIMARY KEY(id))")
-        .unwrap();
+    db.execute("CREATE NODE TABLE Conversation(id INT64, title STRING, PRIMARY KEY(id))").unwrap();
     db.execute(
         "CREATE NODE TABLE Message(id INT64, text STRING, ts INT64, sender STRING, PRIMARY KEY(id))",
     )
@@ -1497,10 +1380,7 @@ fn n11_dm_conversation_thread() {
     assert_eq!(messages.rows()[2].get_int(1).unwrap(), 1600);
     assert_eq!(messages.rows()[3].get_string(0).unwrap(), "Welcome Carol!");
     assert_eq!(messages.rows()[3].get_int(1).unwrap(), 1700);
-    assert_eq!(
-        messages.rows()[4].get_string(0).unwrap(),
-        "Lets plan the sprint"
-    );
+    assert_eq!(messages.rows()[4].get_string(0).unwrap(), "Lets plan the sprint");
     assert_eq!(messages.rows()[4].get_int(1).unwrap(), 1800);
 
     // 断言4: Carol 加入前的消息仍可通过对话查到
@@ -1532,10 +1412,7 @@ fn n11_dm_conversation_thread() {
         .unwrap();
     let mut sender_counts: HashMap<String, i64> = HashMap::new();
     for row in sender_stats.rows() {
-        sender_counts.insert(
-            row.get_string(0).unwrap().to_string(),
-            row.get_int(1).unwrap(),
-        );
+        sender_counts.insert(row.get_string(0).unwrap().to_string(), row.get_int(1).unwrap());
     }
     assert_eq!(sender_counts["Alice"], 2);
     assert_eq!(sender_counts["Bob"], 2);
@@ -1549,9 +1426,6 @@ fn n11_dm_conversation_thread() {
         )
         .unwrap();
     assert_eq!(latest.num_rows(), 1);
-    assert_eq!(
-        latest.rows()[0].get_string(0).unwrap(),
-        "Lets plan the sprint"
-    );
+    assert_eq!(latest.rows()[0].get_string(0).unwrap(), "Lets plan the sprint");
     assert_eq!(latest.rows()[0].get_string(1).unwrap(), "Bob");
 }

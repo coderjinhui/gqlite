@@ -551,7 +551,7 @@ impl Database {
                 let src_nt = src_nt.unwrap();
                 let dst_nt = dst_nt.unwrap();
 
-                for (src_id, dst_id) in rt.all_edges() {
+                for (src_id, dst_id, rel_id) in rt.all_edges_with_rel_id() {
                     // Look up PK values for src and dst
                     let src_row = src_nt.read(src_id.offset);
                     let dst_row = dst_nt.read(dst_id.offset);
@@ -577,6 +577,29 @@ impl Database {
                     out.push_str(&value_to_cypher(dst_pk));
                     out.push_str(" CREATE (a)-[r:");
                     out.push_str(&rel_entry.name);
+
+                    // Append edge properties if any
+                    let mut props = Vec::new();
+                    for col in &rel_entry.columns {
+                        if let Some(val) = rt.get_rel_property(rel_id, &col.name) {
+                            if val != Value::Null {
+                                props.push((col.name.clone(), val));
+                            }
+                        }
+                    }
+                    if !props.is_empty() {
+                        out.push_str(" {");
+                        for (i, (key, val)) in props.iter().enumerate() {
+                            if i > 0 {
+                                out.push_str(", ");
+                            }
+                            out.push_str(key);
+                            out.push_str(": ");
+                            out.push_str(&value_to_cypher(val));
+                        }
+                        out.push('}');
+                    }
+
                     out.push_str("]->(b);\n");
                 }
             }
@@ -669,7 +692,10 @@ fn value_to_cypher(v: &Value) -> String {
         }
         Value::Date(d) => format!("date('{}')", d.format("%Y-%m-%d")),
         Value::DateTime(dt) => format!("datetime('{}')", dt.format("%Y-%m-%dT%H:%M:%S")),
-        Value::Duration(ms) => format!("duration('PT{}S')", ms / 1000),
+        Value::Duration(ms) => {
+            let secs = *ms as f64 / 1000.0;
+            format!("duration('PT{:.3}S')", secs)
+        }
         Value::List(items) => {
             let inner: Vec<String> = items.iter().map(value_to_cypher).collect();
             format!("[{}]", inner.join(", "))
@@ -879,11 +905,21 @@ impl Connection {
             }
 
             // Execute (both read and write ops go through the engine)
+            // TODO: integrate WriteSet for full atomicity — currently, if statement N
+            // fails, statements 1..N-1 have already mutated catalog/storage in memory.
+            // txn_manager.rollback() only marks the transaction as rolled back but does
+            // not undo prior mutations. WriteSet (transaction/write_set.rs) was designed
+            // for this but is not yet wired into the engine execution path.
             match engine.execute_plan(&physical, &self.db, txn_id) {
                 Ok(r) => {
                     last_result = r;
                 }
                 Err(e) => {
+                    warn!(
+                        "txn={} rolling back after statement failure in multi-statement block; \
+                         prior mutations in this block are NOT reverted (WriteSet not yet integrated)",
+                        txn_id
+                    );
                     self.db.txn_manager.rollback(&mut txn);
                     return Err(e);
                 }
@@ -891,6 +927,9 @@ impl Connection {
         }
 
         // Flush all buffered WAL records + TxnCommit
+        // TODO: integrate WriteSet for full rollback on WAL failure —
+        // if wal.append() fails here, in-memory state has already been
+        // mutated by execute_plan() and cannot be reverted without WriteSet.
         let mut should_checkpoint = false;
         {
             let mut wal_guard = self.db.wal.lock();
@@ -1027,6 +1066,9 @@ impl Connection {
             match &result {
                 Ok(_) => {
                     // Flush buffered WAL records + TxnCommit atomically
+                    // TODO: integrate WriteSet for full rollback on WAL failure —
+                    // if wal.append() fails here, in-memory state has already been
+                    // mutated by execute_plan() and cannot be reverted without WriteSet.
                     let mut wal_guard = self.db.wal.lock();
                     if let Some(wal) = wal_guard.as_mut() {
                         for record in &engine.wal_buffer {
@@ -1204,6 +1246,9 @@ impl PreparedStatement {
                 Ok(_) => {
                     let mut wal_guard = self.db.wal.lock();
                     if let Some(wal) = wal_guard.as_mut() {
+                        for record in &engine.wal_buffer {
+                            wal.append(record)?;
+                        }
                         wal.append(&WalRecord { txn_id, payload: WalPayload::TxnCommit })?;
                         should_checkpoint = self.db.config.auto_checkpoint
                             && wal.record_count() >= self.db.config.checkpoint_threshold;

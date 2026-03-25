@@ -102,10 +102,8 @@ fn r02_direct_and_inherited_permission_dedup() {
     // Roles: admin inherits from viewer
     db.execute("CREATE (r:Role {id: 1, name: 'admin'})").unwrap();
     db.execute("CREATE (r:Role {id: 2, name: 'viewer'})").unwrap();
-    db.execute(
-        "MATCH (a:Role), (b:Role) WHERE a.id = 1 AND b.id = 2 CREATE (a)-[:INHERITS]->(b)",
-    )
-    .unwrap();
+    db.execute("MATCH (a:Role), (b:Role) WHERE a.id = 1 AND b.id = 2 CREATE (a)-[:INHERITS]->(b)")
+        .unwrap();
 
     // Permissions
     db.execute("CREATE (p:Permission {id: 1, name: 'read'})").unwrap();
@@ -287,10 +285,7 @@ fn r03_deny_allow_conflict_resolution() {
     }
     effective.sort();
     assert_eq!(effective, vec!["read", "write"]);
-    assert!(
-        !effective.contains(&"delete".to_string()),
-        "delete should be denied"
-    );
+    assert!(!effective.contains(&"delete".to_string()), "delete should be denied");
 
     // Verify high-priority deny via query: the deny grant for 'delete' has priority 100
     let deny_priority = db
@@ -316,10 +311,7 @@ fn r04_multi_tenant_role_isolation() {
     db.execute("CREATE NODE TABLE Role(id INT64, name STRING, org_id INT64, PRIMARY KEY(id))")
         .unwrap();
     db.execute("CREATE NODE TABLE Permission(id INT64, name STRING, PRIMARY KEY(id))").unwrap();
-    db.execute(
-        "CREATE NODE TABLE Organization(id INT64, name STRING, PRIMARY KEY(id))",
-    )
-    .unwrap();
+    db.execute("CREATE NODE TABLE Organization(id INT64, name STRING, PRIMARY KEY(id))").unwrap();
     db.execute("CREATE REL TABLE HAS_ROLE(FROM User TO Role)").unwrap();
     db.execute("CREATE REL TABLE GRANTS(FROM Role TO Permission)").unwrap();
     db.execute("CREATE REL TABLE BELONGS_TO(FROM User TO Organization)").unwrap();
@@ -653,16 +645,8 @@ fn r07_batch_role_changes_in_transaction() {
         (5, "role_e", 5, "perm_e"),
     ];
     for (rid, rname, pid, pname) in &role_perm {
-        db.execute(&format!(
-            "CREATE (r:Role {{id: {}, name: '{}'}})",
-            rid, rname
-        ))
-        .unwrap();
-        db.execute(&format!(
-            "CREATE (p:Permission {{id: {}, name: '{}'}})",
-            pid, pname
-        ))
-        .unwrap();
+        db.execute(&format!("CREATE (r:Role {{id: {}, name: '{}'}})", rid, rname)).unwrap();
+        db.execute(&format!("CREATE (p:Permission {{id: {}, name: '{}'}})", pid, pname)).unwrap();
         db.execute(&format!(
             "MATCH (r:Role), (p:Permission) WHERE r.id = {} AND p.id = {} \
              CREATE (r)-[:GRANTS]->(p)",
@@ -750,11 +734,7 @@ fn r08_super_admin_hotspot_query() {
 
     // Create 210 permissions and link them all to super_admin
     for i in 1..=210 {
-        db.execute(&format!(
-            "CREATE (p:Permission {{id: {}, name: 'perm_{}'}})",
-            i, i
-        ))
-        .unwrap();
+        db.execute(&format!("CREATE (p:Permission {{id: {}, name: 'perm_{}'}})", i, i)).unwrap();
         db.execute(&format!(
             "MATCH (r:Role), (p:Permission) WHERE r.id = 1 AND p.id = {} \
              CREATE (r)-[:GRANTS]->(p)",
@@ -818,10 +798,8 @@ fn r09_audit_trail_multi_hop_trace() {
     let db = Database::in_memory();
 
     db.execute("CREATE NODE TABLE User(id INT64, name STRING, PRIMARY KEY(id))").unwrap();
-    db.execute(
-        "CREATE NODE TABLE Action(id INT64, name STRING, timestamp INT64, PRIMARY KEY(id))",
-    )
-    .unwrap();
+    db.execute("CREATE NODE TABLE Action(id INT64, name STRING, timestamp INT64, PRIMARY KEY(id))")
+        .unwrap();
     db.execute("CREATE NODE TABLE Resource(id INT64, name STRING, PRIMARY KEY(id))").unwrap();
     db.execute(
         "CREATE NODE TABLE AuditEvent(id INT64, event_type STRING, detail STRING, PRIMARY KEY(id))",
@@ -936,11 +914,7 @@ fn r09_audit_trail_multi_hop_trace() {
         )
         .unwrap();
     assert_eq!(r_actions.num_rows(), 2, "alice performed 2 actions on user_db");
-    let action_ids: Vec<i64> = r_actions
-        .rows()
-        .iter()
-        .map(|row| row.get_int(0).unwrap())
-        .collect();
+    let action_ids: Vec<i64> = r_actions.rows().iter().map(|row| row.get_int(0).unwrap()).collect();
     assert_eq!(action_ids, vec![1, 2]);
 
     // Step 2: for each action, get the audit event
@@ -1022,18 +996,12 @@ fn r10_circular_role_inheritance_detection() {
     db.execute("CREATE (r:Role {id: 2, name: 'manager'})").unwrap();
     db.execute("CREATE (r:Role {id: 3, name: 'lead'})").unwrap();
 
-    db.execute(
-        "MATCH (a:Role), (b:Role) WHERE a.id = 1 AND b.id = 2 CREATE (a)-[:INHERITS]->(b)",
-    )
-    .unwrap();
-    db.execute(
-        "MATCH (a:Role), (b:Role) WHERE a.id = 2 AND b.id = 3 CREATE (a)-[:INHERITS]->(b)",
-    )
-    .unwrap();
-    db.execute(
-        "MATCH (a:Role), (b:Role) WHERE a.id = 3 AND b.id = 1 CREATE (a)-[:INHERITS]->(b)",
-    )
-    .unwrap();
+    db.execute("MATCH (a:Role), (b:Role) WHERE a.id = 1 AND b.id = 2 CREATE (a)-[:INHERITS]->(b)")
+        .unwrap();
+    db.execute("MATCH (a:Role), (b:Role) WHERE a.id = 2 AND b.id = 3 CREATE (a)-[:INHERITS]->(b)")
+        .unwrap();
+    db.execute("MATCH (a:Role), (b:Role) WHERE a.id = 3 AND b.id = 1 CREATE (a)-[:INHERITS]->(b)")
+        .unwrap();
 
     // Variable-length path query should NOT loop/panic
     let result = db.query(
@@ -1113,14 +1081,10 @@ fn r11_mid_chain_role_deletion_cascade() {
     db.execute("CREATE (r:Role {id: 2, name: 'role_b'})").unwrap();
     db.execute("CREATE (r:Role {id: 3, name: 'role_c'})").unwrap();
 
-    db.execute(
-        "MATCH (a:Role), (b:Role) WHERE a.id = 1 AND b.id = 2 CREATE (a)-[:INHERITS]->(b)",
-    )
-    .unwrap();
-    db.execute(
-        "MATCH (a:Role), (b:Role) WHERE a.id = 2 AND b.id = 3 CREATE (a)-[:INHERITS]->(b)",
-    )
-    .unwrap();
+    db.execute("MATCH (a:Role), (b:Role) WHERE a.id = 1 AND b.id = 2 CREATE (a)-[:INHERITS]->(b)")
+        .unwrap();
+    db.execute("MATCH (a:Role), (b:Role) WHERE a.id = 2 AND b.id = 3 CREATE (a)-[:INHERITS]->(b)")
+        .unwrap();
 
     // Permissions: role_a has perm_a (directly), role_b has perm_x, role_c has perm_y
     db.execute("CREATE (p:Permission {id: 1, name: 'perm_a'})").unwrap();
@@ -1207,16 +1171,10 @@ fn r11_mid_chain_role_deletion_cascade() {
              RETURN p.name ORDER BY p.name",
         )
         .unwrap();
-    assert_eq!(
-        r.num_rows(),
-        0,
-        "no inherited permissions after mid-chain deletion"
-    );
+    assert_eq!(r.num_rows(), 0, "no inherited permissions after mid-chain deletion");
 
     // No dangling INHERITS edges from role_a (its target role_b was DETACH DELETEd)
-    let r = db
-        .query("MATCH (a:Role)-[:INHERITS]->(b:Role) RETURN a.name, b.name")
-        .unwrap();
+    let r = db.query("MATCH (a:Role)-[:INHERITS]->(b:Role) RETURN a.name, b.name").unwrap();
     // The only INHERITS that should remain is role_b->role_c, but role_b is deleted.
     // role_a->role_b was cleaned by DETACH DELETE of role_b.
     // role_b->role_c was cleaned by DETACH DELETE of role_b.

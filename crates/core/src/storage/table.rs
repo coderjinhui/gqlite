@@ -483,6 +483,20 @@ impl RelTable {
         edges
     }
 
+    /// Return all edges as (src_InternalId, dst_InternalId, rel_id) triples.
+    /// Includes the relationship ID for property lookups.
+    pub fn all_edges_with_rel_id(&self) -> Vec<(InternalId, InternalId, u64)> {
+        let mut edges = Vec::new();
+        for csr in &self.fwd_groups {
+            for (src_offset, dst_offset, rel_id) in csr.all_edges() {
+                let src = InternalId::new(self.src_table_id, src_offset);
+                let dst = InternalId::new(self.dst_table_id, dst_offset);
+                edges.push((src, dst, rel_id));
+            }
+        }
+        edges
+    }
+
     /// Get the schema (column name, type) for relationship properties.
     pub fn schema(&self) -> &[(String, DataType)] {
         &self.schema

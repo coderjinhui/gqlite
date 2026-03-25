@@ -154,10 +154,8 @@ fn f02_time_window_high_frequency() {
     let db = Database::in_memory();
 
     db.execute("CREATE NODE TABLE Account(id INT64, name STRING, PRIMARY KEY(id))").unwrap();
-    db.execute(
-        "CREATE NODE TABLE Transaction(id INT64, amount DOUBLE, ts INT64, PRIMARY KEY(id))",
-    )
-    .unwrap();
+    db.execute("CREATE NODE TABLE Transaction(id INT64, amount DOUBLE, ts INT64, PRIMARY KEY(id))")
+        .unwrap();
     db.execute("CREATE REL TABLE INITIATED(FROM Account TO Transaction)").unwrap();
     db.execute("CREATE REL TABLE RECEIVED_BY(FROM Transaction TO Account)").unwrap();
 
@@ -251,10 +249,8 @@ fn f03_structuring_detection() {
     let db = Database::in_memory();
 
     db.execute("CREATE NODE TABLE Account(id INT64, name STRING, PRIMARY KEY(id))").unwrap();
-    db.execute(
-        "CREATE NODE TABLE Transaction(id INT64, amount DOUBLE, ts INT64, PRIMARY KEY(id))",
-    )
-    .unwrap();
+    db.execute("CREATE NODE TABLE Transaction(id INT64, amount DOUBLE, ts INT64, PRIMARY KEY(id))")
+        .unwrap();
     db.execute("CREATE REL TABLE INITIATED(FROM Account TO Transaction)").unwrap();
     db.execute("CREATE REL TABLE RECEIVED_BY(FROM Transaction TO Account)").unwrap();
 
@@ -319,11 +315,7 @@ fn f03_structuring_detection() {
 
     // 总金额应接近 48500
     let total = result.rows()[0].get_float(3).unwrap();
-    assert!(
-        (total - 48500.0).abs() < 1.0,
-        "分拆交易总金额应为 48500，实际 {}",
-        total
-    );
+    assert!((total - 48500.0).abs() < 1.0, "分拆交易总金额应为 48500，实际 {}", total);
 
     // 断言 2：单笔超阈值的交易不在分拆模式中
     let over_threshold = db
@@ -516,28 +508,15 @@ fn f05_investigation_subgraph() {
     let db = Database::in_memory();
 
     // 创建完整的调查子图表结构
-    db.execute(
-        "CREATE NODE TABLE Account(id INT64, name STRING, PRIMARY KEY(id))",
-    )
-    .unwrap();
-    db.execute(
-        "CREATE NODE TABLE Transaction(id INT64, amount DOUBLE, ts INT64, PRIMARY KEY(id))",
-    )
-    .unwrap();
+    db.execute("CREATE NODE TABLE Account(id INT64, name STRING, PRIMARY KEY(id))").unwrap();
+    db.execute("CREATE NODE TABLE Transaction(id INT64, amount DOUBLE, ts INT64, PRIMARY KEY(id))")
+        .unwrap();
     db.execute("CREATE NODE TABLE Device(id INT64, fingerprint STRING, PRIMARY KEY(id))").unwrap();
     db.execute("CREATE NODE TABLE IPAddress(id INT64, addr STRING, PRIMARY KEY(id))").unwrap();
-    db.execute(
-        "CREATE NODE TABLE Alert(id INT64, severity STRING, ts INT64, PRIMARY KEY(id))",
-    )
-    .unwrap();
-    db.execute(
-        "CREATE NODE TABLE FraudCase(id INT64, status STRING, PRIMARY KEY(id))",
-    )
-    .unwrap();
-    db.execute(
-        "CREATE NODE TABLE Investigator(id INT64, name STRING, PRIMARY KEY(id))",
-    )
-    .unwrap();
+    db.execute("CREATE NODE TABLE Alert(id INT64, severity STRING, ts INT64, PRIMARY KEY(id))")
+        .unwrap();
+    db.execute("CREATE NODE TABLE FraudCase(id INT64, status STRING, PRIMARY KEY(id))").unwrap();
+    db.execute("CREATE NODE TABLE Investigator(id INT64, name STRING, PRIMARY KEY(id))").unwrap();
 
     db.execute("CREATE REL TABLE INITIATED(FROM Account TO Transaction)").unwrap();
     db.execute("CREATE REL TABLE RECEIVED_BY(FROM Transaction TO Account)").unwrap();
@@ -659,11 +638,7 @@ fn f05_investigation_subgraph() {
     // 两笔交易都使用了 fp_suspect 设备，结果可能有 2 行
     assert!(case_devices.num_rows() >= 1, "案件涉及的交易应关联到设备");
     for row in case_devices.rows() {
-        assert_eq!(
-            row.get_string(0).unwrap(),
-            "fp_suspect",
-            "所有设备应为 fp_suspect"
-        );
+        assert_eq!(row.get_string(0).unwrap(), "fp_suspect", "所有设备应为 fp_suspect");
     }
 
     // 断言 5：多跳查询 FraudCase→Transaction→IP
@@ -677,11 +652,7 @@ fn f05_investigation_subgraph() {
     // 两笔交易都使用了同一 IP，结果可能有 2 行
     assert!(case_ips.num_rows() >= 1, "案件涉及的交易应关联到 IP");
     for row in case_ips.rows() {
-        assert_eq!(
-            row.get_string(0).unwrap(),
-            "185.100.87.202",
-            "所有 IP 应为 185.100.87.202"
-        );
+        assert_eq!(row.get_string(0).unwrap(), "185.100.87.202", "所有 IP 应为 185.100.87.202");
     }
 
     // 断言 6：完整证据链 Account→Transaction→Alert（从嫌疑人到告警）
@@ -752,14 +723,10 @@ fn f06_risk_score_update() {
     assert_eq!(high_risk_after.rows()[0].get_string(0).unwrap(), "dave");
 
     // 断言 4：验证具体分数正确
-    let alice_score = db
-        .query("MATCH (a:Account) WHERE a.id = 1 RETURN a.risk_score")
-        .unwrap();
+    let alice_score = db.query("MATCH (a:Account) WHERE a.id = 1 RETURN a.risk_score").unwrap();
     assert_eq!(alice_score.rows()[0].get_int(0).unwrap(), 40, "alice 的分数应为 40");
 
-    let dave_score = db
-        .query("MATCH (a:Account) WHERE a.id = 4 RETURN a.risk_score")
-        .unwrap();
+    let dave_score = db.query("MATCH (a:Account) WHERE a.id = 4 RETURN a.risk_score").unwrap();
     assert_eq!(dave_score.rows()[0].get_int(0).unwrap(), 88, "dave 的分数应为 88");
 
     // 断言 5：中等风险区间 [40, 60] 的账户
@@ -799,22 +766,13 @@ fn f07_blacklist_graylist() {
     db.execute("CREATE REL TABLE FROM_IP(FROM Account TO IPAddress)").unwrap();
 
     // 名单节点
-    db.execute(
-        "CREATE (bl:Blacklist {id: 1, list_type: 'blacklist', entity_type: 'account'})",
-    )
-    .unwrap();
-    db.execute(
-        "CREATE (bl:Blacklist {id: 2, list_type: 'graylist', entity_type: 'account'})",
-    )
-    .unwrap();
-    db.execute(
-        "CREATE (bl:Blacklist {id: 3, list_type: 'blacklist', entity_type: 'device'})",
-    )
-    .unwrap();
-    db.execute(
-        "CREATE (bl:Blacklist {id: 4, list_type: 'blacklist', entity_type: 'ip'})",
-    )
-    .unwrap();
+    db.execute("CREATE (bl:Blacklist {id: 1, list_type: 'blacklist', entity_type: 'account'})")
+        .unwrap();
+    db.execute("CREATE (bl:Blacklist {id: 2, list_type: 'graylist', entity_type: 'account'})")
+        .unwrap();
+    db.execute("CREATE (bl:Blacklist {id: 3, list_type: 'blacklist', entity_type: 'device'})")
+        .unwrap();
+    db.execute("CREATE (bl:Blacklist {id: 4, list_type: 'blacklist', entity_type: 'ip'})").unwrap();
 
     // 账户
     db.execute("CREATE (a:Account {id: 1, name: 'clean_alice'})").unwrap();
@@ -946,11 +904,7 @@ fn f08_gang_identification_wcc() {
 
     // 团伙 A：3 个账户共享 1 个设备
     for i in 1..=3 {
-        db.execute(&format!(
-            "CREATE (a:Account {{id: {}, name: 'gang_a_{}'}})",
-            i, i
-        ))
-        .unwrap();
+        db.execute(&format!("CREATE (a:Account {{id: {}, name: 'gang_a_{}'}})", i, i)).unwrap();
     }
     db.execute("CREATE (d:Device {id: 1, fingerprint: 'fp_gang_a'})").unwrap();
     for i in 1..=3 {
@@ -964,11 +918,7 @@ fn f08_gang_identification_wcc() {
 
     // 团伙 B：4 个账户共享 1 个 IP
     for i in 4..=7 {
-        db.execute(&format!(
-            "CREATE (a:Account {{id: {}, name: 'gang_b_{}'}})",
-            i, i
-        ))
-        .unwrap();
+        db.execute(&format!("CREATE (a:Account {{id: {}, name: 'gang_b_{}'}})", i, i)).unwrap();
     }
     db.execute("CREATE (ip:IPAddress {id: 1, addr: '10.0.0.99'})").unwrap();
     for i in 4..=7 {
@@ -1167,10 +1117,8 @@ fn f09_fund_cycle_detection() {
 fn f10_cross_border_fraud() {
     let db = Database::in_memory();
 
-    db.execute(
-        "CREATE NODE TABLE Account(id INT64, name STRING, country STRING, PRIMARY KEY(id))",
-    )
-    .unwrap();
+    db.execute("CREATE NODE TABLE Account(id INT64, name STRING, country STRING, PRIMARY KEY(id))")
+        .unwrap();
     db.execute(
         "CREATE NODE TABLE Transaction(id INT64, amount DOUBLE, ts INT64, dest_country STRING, PRIMARY KEY(id))",
     )
@@ -1186,30 +1134,20 @@ fn f10_cross_border_fraud() {
 
     // 交易（含目标国家）
     // 跨境交易：CN -> US
-    db.execute(
-        "CREATE (t:Transaction {id: 701, amount: 50000.0, ts: 1000, dest_country: 'US'})",
-    )
-    .unwrap();
+    db.execute("CREATE (t:Transaction {id: 701, amount: 50000.0, ts: 1000, dest_country: 'US'})")
+        .unwrap();
     // 跨境交易：CN -> JP
-    db.execute(
-        "CREATE (t:Transaction {id: 702, amount: 30000.0, ts: 1010, dest_country: 'JP'})",
-    )
-    .unwrap();
+    db.execute("CREATE (t:Transaction {id: 702, amount: 30000.0, ts: 1010, dest_country: 'JP'})")
+        .unwrap();
     // 国内交易：CN -> CN
-    db.execute(
-        "CREATE (t:Transaction {id: 703, amount: 8000.0, ts: 1020, dest_country: 'CN'})",
-    )
-    .unwrap();
+    db.execute("CREATE (t:Transaction {id: 703, amount: 8000.0, ts: 1020, dest_country: 'CN'})")
+        .unwrap();
     // 跨境交易：US -> JP
-    db.execute(
-        "CREATE (t:Transaction {id: 704, amount: 120000.0, ts: 1030, dest_country: 'JP'})",
-    )
-    .unwrap();
+    db.execute("CREATE (t:Transaction {id: 704, amount: 120000.0, ts: 1030, dest_country: 'JP'})")
+        .unwrap();
     // 跨境交易：CN -> US（大额）
-    db.execute(
-        "CREATE (t:Transaction {id: 705, amount: 200000.0, ts: 1040, dest_country: 'US'})",
-    )
-    .unwrap();
+    db.execute("CREATE (t:Transaction {id: 705, amount: 200000.0, ts: 1040, dest_country: 'US'})")
+        .unwrap();
 
     // cn_alice -> us_bob (跨境)
     db.execute(
@@ -1509,10 +1447,8 @@ fn f11_synthetic_identity_detection() {
 fn f12_multi_dimensional_velocity_check() {
     let db = Database::in_memory();
 
-    db.execute(
-        "CREATE NODE TABLE Account(id INT64, name STRING, country STRING, PRIMARY KEY(id))",
-    )
-    .unwrap();
+    db.execute("CREATE NODE TABLE Account(id INT64, name STRING, country STRING, PRIMARY KEY(id))")
+        .unwrap();
     db.execute(
         "CREATE NODE TABLE Transaction(id INT64, amount DOUBLE, ts INT64, dest_country STRING, PRIMARY KEY(id))",
     )
@@ -1528,11 +1464,8 @@ fn f12_multi_dimensional_velocity_check() {
 
     // alice 的交易：多维度异常
     // 高频 + 跨境分拆：5 分钟内 3 笔交易到 US 目标
-    let alice_split = vec![
-        (801, 9999.0, 1000_i64, "US"),
-        (802, 9998.0, 1020, "US"),
-        (803, 9997.0, 1040, "US"),
-    ];
+    let alice_split =
+        vec![(801, 9999.0, 1000_i64, "US"), (802, 9998.0, 1020, "US"), (803, 9997.0, 1040, "US")];
     for (id, amount, ts, dest) in &alice_split {
         db.execute(&format!(
             "CREATE (t:Transaction {{id: {}, amount: {:.1}, ts: {}, dest_country: '{}'}})",
@@ -1554,10 +1487,8 @@ fn f12_multi_dimensional_velocity_check() {
     }
 
     // alice 的大额国内交易
-    db.execute(
-        "CREATE (t:Transaction {id: 804, amount: 80000.0, ts: 5000, dest_country: 'CN'})",
-    )
-    .unwrap();
+    db.execute("CREATE (t:Transaction {id: 804, amount: 80000.0, ts: 5000, dest_country: 'CN'})")
+        .unwrap();
     db.execute(
         "MATCH (a:Account), (t:Transaction) WHERE a.id = 1 AND t.id = 804 \
          CREATE (a)-[:INITIATED]->(t)",
@@ -1570,10 +1501,8 @@ fn f12_multi_dimensional_velocity_check() {
     .unwrap();
 
     // bob 的正常交易：单笔国内
-    db.execute(
-        "CREATE (t:Transaction {id: 805, amount: 3000.0, ts: 2000, dest_country: 'CN'})",
-    )
-    .unwrap();
+    db.execute("CREATE (t:Transaction {id: 805, amount: 3000.0, ts: 2000, dest_country: 'CN'})")
+        .unwrap();
     db.execute(
         "MATCH (a:Account), (t:Transaction) WHERE a.id = 2 AND t.id = 805 \
          CREATE (a)-[:INITIATED]->(t)",
@@ -1637,11 +1566,7 @@ fn f12_multi_dimensional_velocity_check() {
     assert_eq!(combined_split.rows()[0].get_string(0).unwrap(), "multi_dim_alice");
     assert_eq!(combined_split.rows()[0].get_int(2).unwrap(), 3, "应有 3 笔分拆交易");
     let total = combined_split.rows()[0].get_float(3).unwrap();
-    assert!(
-        (total - 29994.0).abs() < 1.0,
-        "分拆总金额应为 29994，实际 {}",
-        total
-    );
+    assert!((total - 29994.0).abs() < 1.0, "分拆总金额应为 29994，实际 {}", total);
 
     // 断言 5：单独各维度查询结果正确，AND 组合缩小范围
     // bob 不应出现在任何告警中
@@ -1663,10 +1588,7 @@ fn f12_multi_dimensional_velocity_check() {
              RETURN count(*) AS cnt",
         )
         .unwrap();
-    assert!(
-        alice_freq.rows()[0].get_int(0).unwrap() >= 3,
-        "alice 应触发高频维度"
-    );
+    assert!(alice_freq.rows()[0].get_int(0).unwrap() >= 3, "alice 应触发高频维度");
 
     // 大额
     let alice_big = db
@@ -1676,10 +1598,7 @@ fn f12_multi_dimensional_velocity_check() {
              RETURN count(*) AS cnt",
         )
         .unwrap();
-    assert!(
-        alice_big.rows()[0].get_int(0).unwrap() >= 1,
-        "alice 应触发大额维度"
-    );
+    assert!(alice_big.rows()[0].get_int(0).unwrap() >= 1, "alice 应触发大额维度");
 
     // 跨境
     let alice_cross = db
@@ -1689,8 +1608,5 @@ fn f12_multi_dimensional_velocity_check() {
              RETURN count(*) AS cnt",
         )
         .unwrap();
-    assert!(
-        alice_cross.rows()[0].get_int(0).unwrap() >= 1,
-        "alice 应触发跨境维度"
-    );
+    assert!(alice_cross.rows()[0].get_int(0).unwrap() >= 1, "alice 应触发跨境维度");
 }

@@ -364,10 +364,8 @@ fn k04_relation_property_reasoning() {
     db.execute("CREATE NODE TABLE Paper(id INT64, title STRING, year INT64, PRIMARY KEY(id))")
         .unwrap();
     // 中间节点：Authorship 带 role 和 year
-    db.execute(
-        "CREATE NODE TABLE Authorship(id INT64, role STRING, year INT64, PRIMARY KEY(id))",
-    )
-    .unwrap();
+    db.execute("CREATE NODE TABLE Authorship(id INT64, role STRING, year INT64, PRIMARY KEY(id))")
+        .unwrap();
     // 中间节点：Citation 带 context
     db.execute("CREATE NODE TABLE Citation(id INT64, context STRING, PRIMARY KEY(id))").unwrap();
 
@@ -501,7 +499,11 @@ fn k04_relation_property_reasoning() {
         )
         .unwrap();
     // Papers 1, 3, 5 -> Alice + Bob co-authored 3 papers
-    assert_eq!(collab_ab.rows()[0].get_int(0).unwrap(), 3, "Alice and Bob should co-author 3 papers");
+    assert_eq!(
+        collab_ab.rows()[0].get_int(0).unwrap(),
+        3,
+        "Alice and Bob should co-author 3 papers"
+    );
 
     // Alice 与 Carol 合著论文数
     let collab_ac = db
@@ -512,7 +514,11 @@ fn k04_relation_property_reasoning() {
         )
         .unwrap();
     // Papers 2, 5 -> 2
-    assert_eq!(collab_ac.rows()[0].get_int(0).unwrap(), 2, "Alice and Carol should co-author 2 papers");
+    assert_eq!(
+        collab_ac.rows()[0].get_int(0).unwrap(),
+        2,
+        "Alice and Carol should co-author 2 papers"
+    );
 
     // 4) Citation context 可查
     let cite_ctx = db
@@ -813,7 +819,9 @@ fn k07_batch_import() {
     for i in 1..=10 {
         db.execute(&format!(
             "CREATE (a:Author {{id: {}, name: 'Author{}', hindex: {}}})",
-            i, i, 20 + i
+            i,
+            i,
+            20 + i
         ))
         .unwrap();
     }
@@ -883,21 +891,15 @@ fn k07_batch_import() {
     }
 
     // 验证引用关系数 = 49
-    let cite_count = db
-        .query("MATCH (a:Paper)-[:CITES]->(b:Paper) RETURN count(a)")
-        .unwrap();
+    let cite_count = db.query("MATCH (a:Paper)-[:CITES]->(b:Paper) RETURN count(a)").unwrap();
     assert_eq!(cite_count.rows()[0].get_int(0).unwrap(), 49);
 
     // 验证 AUTHORED 关系数 = 50 (first) + 25 (second) = 75
-    let auth_count = db
-        .query("MATCH (a:Author)-[:AUTHORED]->(p:Paper) RETURN count(a)")
-        .unwrap();
+    let auth_count = db.query("MATCH (a:Author)-[:AUTHORED]->(p:Paper) RETURN count(a)").unwrap();
     assert_eq!(auth_count.rows()[0].get_int(0).unwrap(), 75);
 
     // 验证 HAS_TOPIC 关系数 = 50
-    let topic_count = db
-        .query("MATCH (p:Paper)-[:HAS_TOPIC]->(t:Topic) RETURN count(p)")
-        .unwrap();
+    let topic_count = db.query("MATCH (p:Paper)-[:HAS_TOPIC]->(t:Topic) RETURN count(p)").unwrap();
     assert_eq!(topic_count.rows()[0].get_int(0).unwrap(), 50);
 
     // 去重验证：尝试 MERGE 已有论文
@@ -962,18 +964,11 @@ fn k08_orphan_entities_dirty_data() {
 
     // 1) 查找没有作者的论文（孤立论文）
     // 获取所有有作者的论文 ID，然后找出没有作者的
-    let authored_papers = db
-        .query("MATCH (a:Author)-[:AUTHORED]->(p:Paper) RETURN p.id")
-        .unwrap();
-    let authored_ids: std::collections::HashSet<i64> = authored_papers
-        .rows()
-        .iter()
-        .map(|r| r.get_int(0).unwrap())
-        .collect();
+    let authored_papers = db.query("MATCH (a:Author)-[:AUTHORED]->(p:Paper) RETURN p.id").unwrap();
+    let authored_ids: std::collections::HashSet<i64> =
+        authored_papers.rows().iter().map(|r| r.get_int(0).unwrap()).collect();
 
-    let all_papers = db
-        .query("MATCH (p:Paper) RETURN p.id, p.title ORDER BY p.title")
-        .unwrap();
+    let all_papers = db.query("MATCH (p:Paper) RETURN p.id, p.title ORDER BY p.title").unwrap();
 
     let orphan_titles: Vec<&str> = all_papers
         .rows()
@@ -987,14 +982,10 @@ fn k08_orphan_entities_dirty_data() {
     assert!(orphan_titles.contains(&"Another Orphan"));
 
     // 2) 查找没有论文的作者
-    let authors_with_papers = db
-        .query("MATCH (a:Author)-[:AUTHORED]->(p:Paper) RETURN a.id")
-        .unwrap();
-    let author_with_paper_ids: std::collections::HashSet<i64> = authors_with_papers
-        .rows()
-        .iter()
-        .map(|r| r.get_int(0).unwrap())
-        .collect();
+    let authors_with_papers =
+        db.query("MATCH (a:Author)-[:AUTHORED]->(p:Paper) RETURN a.id").unwrap();
+    let author_with_paper_ids: std::collections::HashSet<i64> =
+        authors_with_papers.rows().iter().map(|r| r.get_int(0).unwrap()).collect();
 
     let all_authors = db.query("MATCH (a:Author) RETURN a.id, a.name").unwrap();
     let orphan_author_names: Vec<&str> = all_authors
@@ -1003,7 +994,7 @@ fn k08_orphan_entities_dirty_data() {
         .filter(|r| !author_with_paper_ids.contains(&r.get_int(0).unwrap()))
         .map(|r| r.get_string(1).unwrap())
         .collect();
-    assert!(orphan_author_names.len() >= 1, "Should find authors without papers");
+    assert!(!orphan_author_names.is_empty(), "Should find authors without papers");
     assert!(orphan_author_names.contains(&"Lone Author"));
 
     // 3) 悬挂引用查询不应 panic
@@ -1032,9 +1023,8 @@ fn k08_orphan_entities_dirty_data() {
     assert_eq!(all.rows()[0].get_int(0).unwrap(), 5, "Should have 5 papers including orphans");
 
     // 6) 对缺失属性的论文查询也不应 panic
-    let abs_query = db
-        .query("MATCH (p:Paper) RETURN p.title, p.abstract ORDER BY p.title")
-        .unwrap();
+    let abs_query =
+        db.query("MATCH (p:Paper) RETURN p.title, p.abstract ORDER BY p.title").unwrap();
     assert_eq!(abs_query.num_rows(), 5);
     // abstract is never set, should be null; accessing it should not panic
     for row in abs_query.rows() {
@@ -1154,7 +1144,8 @@ fn k09_temporal_affiliation() {
              RETURN af.id",
         )
         .unwrap();
-    let mit_2018_aff_ids: Vec<i64> = mit_2018.rows().iter().map(|r| r.get_int(0).unwrap()).collect();
+    let mit_2018_aff_ids: Vec<i64> =
+        mit_2018.rows().iter().map(|r| r.get_int(0).unwrap()).collect();
     // aff 1 (Alice at MIT 2015-2019) and aff 3 (Bob at MIT 2018-2023)
     assert_eq!(mit_2018_aff_ids.len(), 2);
 
@@ -1346,7 +1337,7 @@ fn k10_co_citation_analysis() {
     // 计算共被引对
     let mut co_citation_counts: std::collections::HashMap<(i64, i64), i64> =
         std::collections::HashMap::new();
-    for (_citing, cited_list) in &citing_to_cited {
+    for cited_list in citing_to_cited.values() {
         for i in 0..cited_list.len() {
             for j in (i + 1)..cited_list.len() {
                 let (a, b) = if cited_list[i] < cited_list[j] {
@@ -1360,8 +1351,7 @@ fn k10_co_citation_analysis() {
     }
 
     // 按共被引次数排序
-    let mut co_cite_pairs: Vec<((i64, i64), i64)> =
-        co_citation_counts.into_iter().collect();
+    let mut co_cite_pairs: Vec<((i64, i64), i64)> = co_citation_counts.into_iter().collect();
     co_cite_pairs.sort_by(|a, b| b.1.cmp(&a.1));
 
     // (P1, P2) 共被引 3 次 -> 排名第一
@@ -1387,7 +1377,11 @@ fn k10_co_citation_analysis() {
              RETURN count(c)",
         )
         .unwrap();
-    assert_eq!(p1_cited.rows()[0].get_int(0).unwrap(), 4, "P1 should be cited 4 times (3 surveys + survey4)");
+    assert_eq!(
+        p1_cited.rows()[0].get_int(0).unwrap(),
+        4,
+        "P1 should be cited 4 times (3 surveys + survey4)"
+    );
 
     // 验证 P2 被引次数
     let p2_cited = db
@@ -1438,14 +1432,10 @@ fn k11_cross_domain_bridge_researchers() {
     db.execute("CREATE (a:Author {id: 4, name: 'Dr. Triple', hindex: 60})").unwrap(); // ML + Bio + Econ
 
     // 论文
-    db.execute(
-        "CREATE (p:Paper {id: 1, title: 'Deep Learning for Drug Discovery', year: 2021})",
-    )
-    .unwrap();
-    db.execute("CREATE (p:Paper {id: 2, title: 'Transformer Architecture', year: 2022})")
+    db.execute("CREATE (p:Paper {id: 1, title: 'Deep Learning for Drug Discovery', year: 2021})")
         .unwrap();
-    db.execute("CREATE (p:Paper {id: 3, title: 'Genomic Sequence Analysis', year: 2020})")
-        .unwrap();
+    db.execute("CREATE (p:Paper {id: 2, title: 'Transformer Architecture', year: 2022})").unwrap();
+    db.execute("CREATE (p:Paper {id: 3, title: 'Genomic Sequence Analysis', year: 2020})").unwrap();
     db.execute("CREATE (p:Paper {id: 4, title: 'Economic Forecasting with ML', year: 2023})")
         .unwrap();
     db.execute("CREATE (p:Paper {id: 5, title: 'Pure ML Paper', year: 2022})").unwrap();

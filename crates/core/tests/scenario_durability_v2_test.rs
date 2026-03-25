@@ -32,15 +32,10 @@ fn s01_batch_write_10k() {
     // Phase 1: batch insert 10,000 nodes in chunks with periodic checkpoints
     {
         let db = Database::open(&path).unwrap();
-        db.execute("CREATE NODE TABLE Item(id INT64, val STRING, PRIMARY KEY(id))")
-            .unwrap();
+        db.execute("CREATE NODE TABLE Item(id INT64, val STRING, PRIMARY KEY(id))").unwrap();
 
         for i in 1..=10_000 {
-            db.execute(&format!(
-                "CREATE (n:Item {{id: {}, val: 'item_{}'}})",
-                i, i
-            ))
-            .unwrap();
+            db.execute(&format!("CREATE (n:Item {{id: {}, val: 'item_{}'}})", i, i)).unwrap();
 
             // Checkpoint every 2000 nodes to exercise WAL flush
             if i % 2000 == 0 {
@@ -64,19 +59,13 @@ fn s01_batch_write_10k() {
         );
 
         // Spot-check first, middle, and last
-        let r = db
-            .query("MATCH (n:Item) WHERE n.id = 1 RETURN n.val")
-            .unwrap();
+        let r = db.query("MATCH (n:Item) WHERE n.id = 1 RETURN n.val").unwrap();
         assert_eq!(r.rows()[0].get_string(0), Some("item_1"));
 
-        let r = db
-            .query("MATCH (n:Item) WHERE n.id = 5000 RETURN n.val")
-            .unwrap();
+        let r = db.query("MATCH (n:Item) WHERE n.id = 5000 RETURN n.val").unwrap();
         assert_eq!(r.rows()[0].get_string(0), Some("item_5000"));
 
-        let r = db
-            .query("MATCH (n:Item) WHERE n.id = 10000 RETURN n.val")
-            .unwrap();
+        let r = db.query("MATCH (n:Item) WHERE n.id = 10000 RETURN n.val").unwrap();
         assert_eq!(r.rows()[0].get_string(0), Some("item_10000"));
 
         // Integrity check
@@ -98,24 +87,16 @@ fn s02_high_fanout_1000_edges() {
 
     {
         let db = Database::open(&path).unwrap();
-        db.execute("CREATE NODE TABLE Hub(id INT64, name STRING, PRIMARY KEY(id))")
-            .unwrap();
-        db.execute("CREATE NODE TABLE Leaf(id INT64, label STRING, PRIMARY KEY(id))")
-            .unwrap();
-        db.execute("CREATE REL TABLE CONNECTS(FROM Hub TO Leaf)")
-            .unwrap();
+        db.execute("CREATE NODE TABLE Hub(id INT64, name STRING, PRIMARY KEY(id))").unwrap();
+        db.execute("CREATE NODE TABLE Leaf(id INT64, label STRING, PRIMARY KEY(id))").unwrap();
+        db.execute("CREATE REL TABLE CONNECTS(FROM Hub TO Leaf)").unwrap();
 
         // Create the hub node
-        db.execute("CREATE (n:Hub {id: 1, name: 'central_hub'})")
-            .unwrap();
+        db.execute("CREATE (n:Hub {id: 1, name: 'central_hub'})").unwrap();
 
         // Create 1050 leaf nodes and connect them to the hub
         for i in 1..=1050 {
-            db.execute(&format!(
-                "CREATE (n:Leaf {{id: {}, label: 'leaf_{}'}})",
-                i, i
-            ))
-            .unwrap();
+            db.execute(&format!("CREATE (n:Leaf {{id: {}, label: 'leaf_{}'}})", i, i)).unwrap();
             db.execute(&format!(
                 "MATCH (h:Hub), (l:Leaf) WHERE h.id = 1 AND l.id = {} CREATE (h)-[:CONNECTS]->(l)",
                 i
@@ -128,9 +109,8 @@ fn s02_high_fanout_1000_edges() {
         }
 
         // Verify degree: hub should have 1050 outgoing edges
-        let result = db
-            .query("MATCH (h:Hub)-[:CONNECTS]->(l:Leaf) WHERE h.id = 1 RETURN COUNT(l)")
-            .unwrap();
+        let result =
+            db.query("MATCH (h:Hub)-[:CONNECTS]->(l:Leaf) WHERE h.id = 1 RETURN COUNT(l)").unwrap();
         assert_eq!(result.rows()[0].get_int(0), Some(1050));
     }
 
@@ -139,9 +119,8 @@ fn s02_high_fanout_1000_edges() {
         let db = Database::open(&path).unwrap();
 
         // Degree count after reopen
-        let result = db
-            .query("MATCH (h:Hub)-[:CONNECTS]->(l:Leaf) WHERE h.id = 1 RETURN COUNT(l)")
-            .unwrap();
+        let result =
+            db.query("MATCH (h:Hub)-[:CONNECTS]->(l:Leaf) WHERE h.id = 1 RETURN COUNT(l)").unwrap();
         assert_eq!(
             result.rows()[0].get_int(0),
             Some(1050),
@@ -150,13 +129,17 @@ fn s02_high_fanout_1000_edges() {
 
         // Spot-check adjacency: specific leaves are reachable
         let r = db
-            .query("MATCH (h:Hub)-[:CONNECTS]->(l:Leaf) WHERE h.id = 1 AND l.id = 500 RETURN l.label")
+            .query(
+                "MATCH (h:Hub)-[:CONNECTS]->(l:Leaf) WHERE h.id = 1 AND l.id = 500 RETURN l.label",
+            )
             .unwrap();
         assert_eq!(r.num_rows(), 1);
         assert_eq!(r.rows()[0].get_string(0), Some("leaf_500"));
 
         let r = db
-            .query("MATCH (h:Hub)-[:CONNECTS]->(l:Leaf) WHERE h.id = 1 AND l.id = 1050 RETURN l.label")
+            .query(
+                "MATCH (h:Hub)-[:CONNECTS]->(l:Leaf) WHERE h.id = 1 AND l.id = 1050 RETURN l.label",
+            )
             .unwrap();
         assert_eq!(r.num_rows(), 1);
         assert_eq!(r.rows()[0].get_string(0), Some("leaf_1050"));
@@ -198,25 +181,14 @@ fn s03_wide_table_sparse_nulls() {
         // Insert 50 nodes with varying sparsity
         for i in 1..=50 {
             // All nodes get id and c01
-            db.execute(&format!(
-                "CREATE (n:Wide {{id: {}, c01: 'name_{}'}})",
-                i, i
-            ))
-            .unwrap();
+            db.execute(&format!("CREATE (n:Wide {{id: {}, c01: 'name_{}'}})", i, i)).unwrap();
 
             // Even nodes get c06 (INT64) and c11 (STRING)
             if i % 2 == 0 {
-                db.execute(&format!(
-                    "MATCH (n:Wide) WHERE n.id = {} SET n.c06 = {}",
-                    i,
-                    i * 100
-                ))
-                .unwrap();
-                db.execute(&format!(
-                    "MATCH (n:Wide) WHERE n.id = {} SET n.c11 = 'extra_{}'",
-                    i, i
-                ))
-                .unwrap();
+                db.execute(&format!("MATCH (n:Wide) WHERE n.id = {} SET n.c06 = {}", i, i * 100))
+                    .unwrap();
+                db.execute(&format!("MATCH (n:Wide) WHERE n.id = {} SET n.c11 = 'extra_{}'", i, i))
+                    .unwrap();
             }
 
             // Every 10th node gets a long string in c15
@@ -233,7 +205,7 @@ fn s03_wide_table_sparse_nulls() {
                 db.execute(&format!(
                     "MATCH (n:Wide) WHERE n.id = {} SET n.c21 = {:.2}",
                     i,
-                    i as f64 * 3.14
+                    i as f64 * std::f64::consts::PI
                 ))
                 .unwrap();
             }
@@ -251,41 +223,30 @@ fn s03_wide_table_sparse_nulls() {
         assert_eq!(result.rows()[0].get_int(0), Some(50));
 
         // Check sparse c06: only even nodes have it
-        let result = db
-            .query("MATCH (n:Wide) WHERE n.c06 IS NOT NULL RETURN COUNT(n)")
-            .unwrap();
+        let result = db.query("MATCH (n:Wide) WHERE n.c06 IS NOT NULL RETURN COUNT(n)").unwrap();
         assert_eq!(result.rows()[0].get_int(0), Some(25));
 
         // Check c06 value for a specific even node
-        let r = db
-            .query("MATCH (n:Wide) WHERE n.id = 10 RETURN n.c06")
-            .unwrap();
+        let r = db.query("MATCH (n:Wide) WHERE n.id = 10 RETURN n.c06").unwrap();
         assert_eq!(r.rows()[0].get_int(0), Some(1000));
 
         // Check odd nodes have NULL c06
-        let r = db
-            .query("MATCH (n:Wide) WHERE n.id = 7 RETURN n.c06")
-            .unwrap();
+        let r = db.query("MATCH (n:Wide) WHERE n.id = 7 RETURN n.c06").unwrap();
         assert_eq!(r.num_rows(), 1);
         assert!(r.rows()[0].values[0].is_null());
 
         // Check long string in c15 for node 20
-        let r = db
-            .query("MATCH (n:Wide) WHERE n.id = 20 RETURN n.c15")
-            .unwrap();
+        let r = db.query("MATCH (n:Wide) WHERE n.id = 20 RETURN n.c15").unwrap();
         assert_eq!(r.rows()[0].get_string(0).map(|s| s.len()), Some(1500));
 
         // Check c21 for an odd node
-        let r = db
-            .query("MATCH (n:Wide) WHERE n.id = 5 RETURN n.c21")
-            .unwrap();
+        let r = db.query("MATCH (n:Wide) WHERE n.id = 5 RETURN n.c21").unwrap();
         let val = r.rows()[0].get_float(0).unwrap();
-        assert!((val - 15.70).abs() < 0.01);
+        let expected_c21 = format!("{:.2}", 5.0_f64 * std::f64::consts::PI).parse::<f64>().unwrap();
+        assert!((val - expected_c21).abs() < 0.01);
 
         // Check c21 NULL for even node
-        let r = db
-            .query("MATCH (n:Wide) WHERE n.id = 4 RETURN n.c21")
-            .unwrap();
+        let r = db.query("MATCH (n:Wide) WHERE n.id = 4 RETURN n.c21").unwrap();
         assert!(r.rows()[0].values[0].is_null());
 
         let issues = db.check();
@@ -306,10 +267,7 @@ fn s04_relationship_properties() {
 
     {
         let db = Database::open(&path).unwrap();
-        db.execute(
-            "CREATE NODE TABLE Account(id INT64, name STRING, PRIMARY KEY(id))",
-        )
-        .unwrap();
+        db.execute("CREATE NODE TABLE Account(id INT64, name STRING, PRIMARY KEY(id))").unwrap();
         db.execute(
             "CREATE REL TABLE TRANSFER(\
                 FROM Account TO Account, \
@@ -321,11 +279,7 @@ fn s04_relationship_properties() {
 
         // Create 20 accounts
         for i in 1..=20 {
-            db.execute(&format!(
-                "CREATE (n:Account {{id: {}, name: 'acct_{}'}})",
-                i, i
-            ))
-            .unwrap();
+            db.execute(&format!("CREATE (n:Account {{id: {}, name: 'acct_{}'}})", i, i)).unwrap();
         }
 
         // Create 100 transfer relationships with properties
@@ -358,14 +312,10 @@ fn s04_relationship_properties() {
         let db = Database::open(&path).unwrap();
 
         // Verify transfers exist
-        let result = db
-            .query("MATCH (a:Account)-[:TRANSFER]->(b:Account) RETURN COUNT(a)")
-            .unwrap();
+        let result =
+            db.query("MATCH (a:Account)-[:TRANSFER]->(b:Account) RETURN COUNT(a)").unwrap();
         let transfer_count = result.rows()[0].get_int(0).unwrap();
-        assert!(
-            transfer_count > 0,
-            "should have transfer relationships after reopen"
-        );
+        assert!(transfer_count > 0, "should have transfer relationships after reopen");
 
         // Verify account count
         let result = db.query("MATCH (n:Account) RETURN COUNT(n)").unwrap();
@@ -394,11 +344,8 @@ fn s05_hotspot_read_write_mix() {
 
         // Create a few hotspot nodes
         for i in 1..=5 {
-            db.execute(&format!(
-                "CREATE (n:Hot {{id: {}, counter: 0, label: 'hot_{}'}})",
-                i, i
-            ))
-            .unwrap();
+            db.execute(&format!("CREATE (n:Hot {{id: {}, counter: 0, label: 'hot_{}'}})", i, i))
+                .unwrap();
         }
 
         // 100 rounds of update + query on the same hotspot nodes
@@ -415,10 +362,7 @@ fn s05_hotspot_read_write_mix() {
             // Query to verify — all should show the current round value
             for node_id in 1..=5 {
                 let result = db
-                    .query(&format!(
-                        "MATCH (n:Hot) WHERE n.id = {} RETURN n.counter",
-                        node_id
-                    ))
+                    .query(&format!("MATCH (n:Hot) WHERE n.id = {} RETURN n.counter", node_id))
                     .unwrap();
                 assert_eq!(
                     result.rows()[0].get_int(0),
@@ -439,10 +383,7 @@ fn s05_hotspot_read_write_mix() {
         // Final state: all counters should be 100
         for node_id in 1..=5 {
             let result = db
-                .query(&format!(
-                    "MATCH (n:Hot) WHERE n.id = {} RETURN n.counter",
-                    node_id
-                ))
+                .query(&format!("MATCH (n:Hot) WHERE n.id = {} RETURN n.counter", node_id))
                 .unwrap();
             assert_eq!(result.rows()[0].get_int(0), Some(100));
         }
@@ -453,10 +394,7 @@ fn s05_hotspot_read_write_mix() {
         let db = Database::open(&path).unwrap();
         for node_id in 1..=5 {
             let result = db
-                .query(&format!(
-                    "MATCH (n:Hot) WHERE n.id = {} RETURN n.counter",
-                    node_id
-                ))
+                .query(&format!("MATCH (n:Hot) WHERE n.id = {} RETURN n.counter", node_id))
                 .unwrap();
             assert_eq!(
                 result.rows()[0].get_int(0),
@@ -485,8 +423,7 @@ fn s06_checkpoint_reopen_pressure() {
     // Session 0: create schema
     {
         let db = Database::open(&path).unwrap();
-        db.execute("CREATE NODE TABLE Acc(id INT64, round INT64, PRIMARY KEY(id))")
-            .unwrap();
+        db.execute("CREATE NODE TABLE Acc(id INT64, round INT64, PRIMARY KEY(id))").unwrap();
     }
 
     let mut next_id = 1_i64;
@@ -496,11 +433,8 @@ fn s06_checkpoint_reopen_pressure() {
         {
             let db = Database::open(&path).unwrap();
             for _ in 0..100 {
-                db.execute(&format!(
-                    "CREATE (n:Acc {{id: {}, round: {}}})",
-                    next_id, round
-                ))
-                .unwrap();
+                db.execute(&format!("CREATE (n:Acc {{id: {}, round: {}}})", next_id, round))
+                    .unwrap();
                 next_id += 1;
             }
             db.checkpoint().unwrap();
@@ -521,10 +455,7 @@ fn s06_checkpoint_reopen_pressure() {
 
             // Verify this round's data
             let result = db
-                .query(&format!(
-                    "MATCH (n:Acc) WHERE n.round = {} RETURN COUNT(n)",
-                    round
-                ))
+                .query(&format!("MATCH (n:Acc) WHERE n.round = {} RETURN COUNT(n)", round))
                 .unwrap();
             assert_eq!(
                 result.rows()[0].get_int(0),
@@ -536,10 +467,7 @@ fn s06_checkpoint_reopen_pressure() {
             // Verify earlier rounds still intact
             for prev_round in 1..round {
                 let result = db
-                    .query(&format!(
-                        "MATCH (n:Acc) WHERE n.round = {} RETURN COUNT(n)",
-                        prev_round
-                    ))
+                    .query(&format!("MATCH (n:Acc) WHERE n.round = {} RETURN COUNT(n)", prev_round))
                     .unwrap();
                 assert_eq!(
                     result.rows()[0].get_int(0),
@@ -576,17 +504,12 @@ fn s07_bulk_delete_consistency() {
 
     {
         let db = Database::open(&path).unwrap();
-        db.execute("CREATE NODE TABLE Nd(id INT64, tag STRING, PRIMARY KEY(id))")
-            .unwrap();
+        db.execute("CREATE NODE TABLE Nd(id INT64, tag STRING, PRIMARY KEY(id))").unwrap();
         db.execute("CREATE REL TABLE LNK(FROM Nd TO Nd)").unwrap();
 
         // Insert 500 nodes
         for i in 1..=500 {
-            db.execute(&format!(
-                "CREATE (n:Nd {{id: {}, tag: 'initial'}})",
-                i
-            ))
-            .unwrap();
+            db.execute(&format!("CREATE (n:Nd {{id: {}, tag: 'initial'}})", i)).unwrap();
         }
 
         // Insert edges among the first 500 nodes (chain: 1->2, 2->3, ..., 499->500)
@@ -603,36 +526,24 @@ fn s07_bulk_delete_consistency() {
         let result = db.query("MATCH (n:Nd) RETURN COUNT(n)").unwrap();
         assert_eq!(result.rows()[0].get_int(0), Some(500));
 
-        let result = db
-            .query("MATCH (a:Nd)-[:LNK]->(b:Nd) RETURN COUNT(a)")
-            .unwrap();
+        let result = db.query("MATCH (a:Nd)-[:LNK]->(b:Nd) RETURN COUNT(a)").unwrap();
         assert_eq!(result.rows()[0].get_int(0), Some(499));
 
         // Delete nodes 1 through 400 (DETACH DELETE to remove associated edges)
         for i in 1..=400 {
-            db.execute(&format!(
-                "MATCH (n:Nd) WHERE n.id = {} DETACH DELETE n",
-                i
-            ))
-            .unwrap();
+            db.execute(&format!("MATCH (n:Nd) WHERE n.id = {} DETACH DELETE n", i)).unwrap();
         }
 
         // After deletion: 100 nodes remain (401..500), edges among them (401->402, ..., 499->500 = 99 edges)
         let result = db.query("MATCH (n:Nd) RETURN COUNT(n)").unwrap();
         assert_eq!(result.rows()[0].get_int(0), Some(100));
 
-        let result = db
-            .query("MATCH (a:Nd)-[:LNK]->(b:Nd) RETURN COUNT(a)")
-            .unwrap();
+        let result = db.query("MATCH (a:Nd)-[:LNK]->(b:Nd) RETURN COUNT(a)").unwrap();
         assert_eq!(result.rows()[0].get_int(0), Some(99));
 
         // Insert 200 more nodes (id 501..700)
         for i in 501..=700 {
-            db.execute(&format!(
-                "CREATE (n:Nd {{id: {}, tag: 'new_batch'}})",
-                i
-            ))
-            .unwrap();
+            db.execute(&format!("CREATE (n:Nd {{id: {}, tag: 'new_batch'}})", i)).unwrap();
         }
 
         // Add some edges from new nodes to surviving nodes
@@ -649,20 +560,14 @@ fn s07_bulk_delete_consistency() {
 
         // Verify no dangling edges (all edge endpoints should be live nodes)
         let issues = db.check();
-        assert!(
-            issues.is_empty(),
-            "integrity check after delete+insert: {:?}",
-            issues
-        );
+        assert!(issues.is_empty(), "integrity check after delete+insert: {:?}", issues);
 
         // Final counts: 100 (surviving) + 200 (new) = 300 nodes
         let result = db.query("MATCH (n:Nd) RETURN COUNT(n)").unwrap();
         assert_eq!(result.rows()[0].get_int(0), Some(300));
 
         // Edges: 99 (surviving chain) + 50 (new) = 149
-        let result = db
-            .query("MATCH (a:Nd)-[:LNK]->(b:Nd) RETURN COUNT(a)")
-            .unwrap();
+        let result = db.query("MATCH (a:Nd)-[:LNK]->(b:Nd) RETURN COUNT(a)").unwrap();
         assert_eq!(result.rows()[0].get_int(0), Some(149));
     }
 
@@ -672,32 +577,22 @@ fn s07_bulk_delete_consistency() {
         let result = db.query("MATCH (n:Nd) RETURN COUNT(n)").unwrap();
         assert_eq!(result.rows()[0].get_int(0), Some(300));
 
-        let result = db
-            .query("MATCH (a:Nd)-[:LNK]->(b:Nd) RETURN COUNT(a)")
-            .unwrap();
+        let result = db.query("MATCH (a:Nd)-[:LNK]->(b:Nd) RETURN COUNT(a)").unwrap();
         assert_eq!(result.rows()[0].get_int(0), Some(149));
 
         // Deleted nodes should not appear
-        let result = db
-            .query("MATCH (n:Nd) WHERE n.id = 1 RETURN n.id")
-            .unwrap();
+        let result = db.query("MATCH (n:Nd) WHERE n.id = 1 RETURN n.id").unwrap();
         assert_eq!(result.num_rows(), 0);
 
-        let result = db
-            .query("MATCH (n:Nd) WHERE n.id = 400 RETURN n.id")
-            .unwrap();
+        let result = db.query("MATCH (n:Nd) WHERE n.id = 400 RETURN n.id").unwrap();
         assert_eq!(result.num_rows(), 0);
 
         // Surviving node
-        let result = db
-            .query("MATCH (n:Nd) WHERE n.id = 450 RETURN n.tag")
-            .unwrap();
+        let result = db.query("MATCH (n:Nd) WHERE n.id = 450 RETURN n.tag").unwrap();
         assert_eq!(result.rows()[0].get_string(0), Some("initial"));
 
         // New node
-        let result = db
-            .query("MATCH (n:Nd) WHERE n.id = 600 RETURN n.tag")
-            .unwrap();
+        let result = db.query("MATCH (n:Nd) WHERE n.id = 600 RETURN n.tag").unwrap();
         assert_eq!(result.rows()[0].get_string(0), Some("new_batch"));
 
         let issues = db.check();
@@ -720,41 +615,29 @@ fn s08_multi_schema_no_crosstalk() {
         let db = Database::open(&path).unwrap();
 
         // --- RBAC schema ---
-        db.execute("CREATE NODE TABLE User(id INT64, name STRING, PRIMARY KEY(id))")
-            .unwrap();
-        db.execute("CREATE NODE TABLE Role(id INT64, role_name STRING, PRIMARY KEY(id))")
-            .unwrap();
-        db.execute("CREATE REL TABLE HAS_ROLE(FROM User TO Role)")
-            .unwrap();
+        db.execute("CREATE NODE TABLE User(id INT64, name STRING, PRIMARY KEY(id))").unwrap();
+        db.execute("CREATE NODE TABLE Role(id INT64, role_name STRING, PRIMARY KEY(id))").unwrap();
+        db.execute("CREATE REL TABLE HAS_ROLE(FROM User TO Role)").unwrap();
 
         // --- Ecommerce schema ---
-        db.execute("CREATE NODE TABLE Product(id INT64, title STRING, price DOUBLE, PRIMARY KEY(id))")
-            .unwrap();
+        db.execute(
+            "CREATE NODE TABLE Product(id INT64, title STRING, price DOUBLE, PRIMARY KEY(id))",
+        )
+        .unwrap();
         db.execute("CREATE NODE TABLE Category(id INT64, cat_name STRING, PRIMARY KEY(id))")
             .unwrap();
-        db.execute("CREATE REL TABLE BELONGS_TO(FROM Product TO Category)")
-            .unwrap();
+        db.execute("CREATE REL TABLE BELONGS_TO(FROM Product TO Category)").unwrap();
 
         // --- Social schema ---
-        db.execute("CREATE NODE TABLE Person(id INT64, username STRING, PRIMARY KEY(id))")
-            .unwrap();
-        db.execute("CREATE REL TABLE FOLLOWS(FROM Person TO Person)")
-            .unwrap();
+        db.execute("CREATE NODE TABLE Person(id INT64, username STRING, PRIMARY KEY(id))").unwrap();
+        db.execute("CREATE REL TABLE FOLLOWS(FROM Person TO Person)").unwrap();
 
         // Populate RBAC
         for i in 1..=10 {
-            db.execute(&format!(
-                "CREATE (n:User {{id: {}, name: 'user_{}'}})",
-                i, i
-            ))
-            .unwrap();
+            db.execute(&format!("CREATE (n:User {{id: {}, name: 'user_{}'}})", i, i)).unwrap();
         }
         for i in 1..=3 {
-            db.execute(&format!(
-                "CREATE (n:Role {{id: {}, role_name: 'role_{}'}})",
-                i, i
-            ))
-            .unwrap();
+            db.execute(&format!("CREATE (n:Role {{id: {}, role_name: 'role_{}'}})", i, i)).unwrap();
         }
         for i in 1..=10 {
             let role_id = (i % 3) + 1;
@@ -776,11 +659,8 @@ fn s08_multi_schema_no_crosstalk() {
             .unwrap();
         }
         for i in 1..=5 {
-            db.execute(&format!(
-                "CREATE (n:Category {{id: {}, cat_name: 'cat_{}'}})",
-                i, i
-            ))
-            .unwrap();
+            db.execute(&format!("CREATE (n:Category {{id: {}, cat_name: 'cat_{}'}})", i, i))
+                .unwrap();
         }
         for i in 1..=20 {
             let cat_id = (i % 5) + 1;
@@ -793,11 +673,8 @@ fn s08_multi_schema_no_crosstalk() {
 
         // Populate Social
         for i in 1..=15 {
-            db.execute(&format!(
-                "CREATE (n:Person {{id: {}, username: 'person_{}'}})",
-                i, i
-            ))
-            .unwrap();
+            db.execute(&format!("CREATE (n:Person {{id: {}, username: 'person_{}'}})", i, i))
+                .unwrap();
         }
         for i in 1..=15 {
             let target = (i % 15) + 1;
@@ -823,9 +700,7 @@ fn s08_multi_schema_no_crosstalk() {
         let r = db.query("MATCH (r:Role) RETURN COUNT(r)").unwrap();
         assert_eq!(r.rows()[0].get_int(0), Some(3), "RBAC: 3 roles");
 
-        let r = db
-            .query("MATCH (u:User)-[:HAS_ROLE]->(r:Role) RETURN COUNT(u)")
-            .unwrap();
+        let r = db.query("MATCH (u:User)-[:HAS_ROLE]->(r:Role) RETURN COUNT(u)").unwrap();
         assert_eq!(r.rows()[0].get_int(0), Some(10), "RBAC: 10 role assignments");
 
         // Ecommerce checks
@@ -835,41 +710,27 @@ fn s08_multi_schema_no_crosstalk() {
         let r = db.query("MATCH (c:Category) RETURN COUNT(c)").unwrap();
         assert_eq!(r.rows()[0].get_int(0), Some(5), "Ecommerce: 5 categories");
 
-        let r = db
-            .query("MATCH (p:Product)-[:BELONGS_TO]->(c:Category) RETURN COUNT(p)")
-            .unwrap();
-        assert_eq!(
-            r.rows()[0].get_int(0),
-            Some(20),
-            "Ecommerce: 20 product-category links"
-        );
+        let r = db.query("MATCH (p:Product)-[:BELONGS_TO]->(c:Category) RETURN COUNT(p)").unwrap();
+        assert_eq!(r.rows()[0].get_int(0), Some(20), "Ecommerce: 20 product-category links");
 
         // Social checks
         let r = db.query("MATCH (p:Person) RETURN COUNT(p)").unwrap();
         assert_eq!(r.rows()[0].get_int(0), Some(15), "Social: 15 persons");
 
-        let r = db
-            .query("MATCH (a:Person)-[:FOLLOWS]->(b:Person) RETURN COUNT(a)")
-            .unwrap();
+        let r = db.query("MATCH (a:Person)-[:FOLLOWS]->(b:Person) RETURN COUNT(a)").unwrap();
         let follows_count = r.rows()[0].get_int(0).unwrap();
         assert!(follows_count > 0, "Social: should have FOLLOWS edges");
 
         // Cross-talk check: User nodes should not appear as Person nodes
         // (they are separate tables, so queries on one should not return the other)
-        let r = db
-            .query("MATCH (u:User) WHERE u.id = 1 RETURN u.name")
-            .unwrap();
+        let r = db.query("MATCH (u:User) WHERE u.id = 1 RETURN u.name").unwrap();
         assert_eq!(r.rows()[0].get_string(0), Some("user_1"));
 
-        let r = db
-            .query("MATCH (p:Person) WHERE p.id = 1 RETURN p.username")
-            .unwrap();
+        let r = db.query("MATCH (p:Person) WHERE p.id = 1 RETURN p.username").unwrap();
         assert_eq!(r.rows()[0].get_string(0), Some("person_1"));
 
         // Product price should be independent
-        let r = db
-            .query("MATCH (p:Product) WHERE p.id = 5 RETURN p.price")
-            .unwrap();
+        let r = db.query("MATCH (p:Product) WHERE p.id = 5 RETURN p.price").unwrap();
         let price = r.rows()[0].get_float(0).unwrap();
         assert!((price - 49.95).abs() < 0.01);
 
@@ -891,10 +752,8 @@ fn s09_self_loop_and_bidirectional() {
 
     {
         let db = Database::open(&path).unwrap();
-        db.execute("CREATE NODE TABLE Vertex(id INT64, name STRING, PRIMARY KEY(id))")
-            .unwrap();
-        db.execute("CREATE REL TABLE LINKS(FROM Vertex TO Vertex, weight DOUBLE)")
-            .unwrap();
+        db.execute("CREATE NODE TABLE Vertex(id INT64, name STRING, PRIMARY KEY(id))").unwrap();
+        db.execute("CREATE REL TABLE LINKS(FROM Vertex TO Vertex, weight DOUBLE)").unwrap();
 
         // Create nodes
         db.execute("CREATE (n:Vertex {id: 1, name: 'alpha'})").unwrap();
@@ -931,26 +790,30 @@ fn s09_self_loop_and_bidirectional() {
 
         // Verify self-loop on node 1: outgoing from 1 to 1
         let r = db
-            .query("MATCH (a:Vertex)-[:LINKS]->(b:Vertex) WHERE a.id = 1 AND b.id = 1 RETURN COUNT(a)")
+            .query(
+                "MATCH (a:Vertex)-[:LINKS]->(b:Vertex) WHERE a.id = 1 AND b.id = 1 RETURN COUNT(a)",
+            )
             .unwrap();
         assert_eq!(r.rows()[0].get_int(0), Some(1), "node 1 should have 1 self-loop");
 
         // Verify bidirectional: 2->3
         let r = db
-            .query("MATCH (a:Vertex)-[:LINKS]->(b:Vertex) WHERE a.id = 2 AND b.id = 3 RETURN COUNT(a)")
+            .query(
+                "MATCH (a:Vertex)-[:LINKS]->(b:Vertex) WHERE a.id = 2 AND b.id = 3 RETURN COUNT(a)",
+            )
             .unwrap();
         assert_eq!(r.rows()[0].get_int(0), Some(1), "2->3 should exist");
 
         // Verify bidirectional: 3->2
         let r = db
-            .query("MATCH (a:Vertex)-[:LINKS]->(b:Vertex) WHERE a.id = 3 AND b.id = 2 RETURN COUNT(a)")
+            .query(
+                "MATCH (a:Vertex)-[:LINKS]->(b:Vertex) WHERE a.id = 3 AND b.id = 2 RETURN COUNT(a)",
+            )
             .unwrap();
         assert_eq!(r.rows()[0].get_int(0), Some(1), "3->2 should exist");
 
         // Total edges: 1 (self-loop 1) + 1 (2->3) + 1 (3->2) + 1 (self-loop 3) = 4
-        let r = db
-            .query("MATCH (a:Vertex)-[:LINKS]->(b:Vertex) RETURN COUNT(a)")
-            .unwrap();
+        let r = db.query("MATCH (a:Vertex)-[:LINKS]->(b:Vertex) RETURN COUNT(a)").unwrap();
         assert_eq!(r.rows()[0].get_int(0), Some(4), "total 4 edges");
 
         // Outgoing from node 3: 3->2 and 3->3 = 2
@@ -972,39 +835,37 @@ fn s09_self_loop_and_bidirectional() {
 
         // Self-loop on node 1
         let r = db
-            .query("MATCH (a:Vertex)-[:LINKS]->(b:Vertex) WHERE a.id = 1 AND b.id = 1 RETURN COUNT(a)")
+            .query(
+                "MATCH (a:Vertex)-[:LINKS]->(b:Vertex) WHERE a.id = 1 AND b.id = 1 RETURN COUNT(a)",
+            )
             .unwrap();
-        assert_eq!(
-            r.rows()[0].get_int(0),
-            Some(1),
-            "self-loop on node 1 after reopen"
-        );
+        assert_eq!(r.rows()[0].get_int(0), Some(1), "self-loop on node 1 after reopen");
 
         // Bidirectional 2<->3
         let r = db
-            .query("MATCH (a:Vertex)-[:LINKS]->(b:Vertex) WHERE a.id = 2 AND b.id = 3 RETURN COUNT(a)")
+            .query(
+                "MATCH (a:Vertex)-[:LINKS]->(b:Vertex) WHERE a.id = 2 AND b.id = 3 RETURN COUNT(a)",
+            )
             .unwrap();
         assert_eq!(r.rows()[0].get_int(0), Some(1), "2->3 after reopen");
 
         let r = db
-            .query("MATCH (a:Vertex)-[:LINKS]->(b:Vertex) WHERE a.id = 3 AND b.id = 2 RETURN COUNT(a)")
+            .query(
+                "MATCH (a:Vertex)-[:LINKS]->(b:Vertex) WHERE a.id = 3 AND b.id = 2 RETURN COUNT(a)",
+            )
             .unwrap();
         assert_eq!(r.rows()[0].get_int(0), Some(1), "3->2 after reopen");
 
         // Self-loop on node 3
         let r = db
-            .query("MATCH (a:Vertex)-[:LINKS]->(b:Vertex) WHERE a.id = 3 AND b.id = 3 RETURN COUNT(a)")
+            .query(
+                "MATCH (a:Vertex)-[:LINKS]->(b:Vertex) WHERE a.id = 3 AND b.id = 3 RETURN COUNT(a)",
+            )
             .unwrap();
-        assert_eq!(
-            r.rows()[0].get_int(0),
-            Some(1),
-            "self-loop on node 3 after reopen"
-        );
+        assert_eq!(r.rows()[0].get_int(0), Some(1), "self-loop on node 3 after reopen");
 
         // Total edges still 4
-        let r = db
-            .query("MATCH (a:Vertex)-[:LINKS]->(b:Vertex) RETURN COUNT(a)")
-            .unwrap();
+        let r = db.query("MATCH (a:Vertex)-[:LINKS]->(b:Vertex) RETURN COUNT(a)").unwrap();
         assert_eq!(r.rows()[0].get_int(0), Some(4), "total 4 edges after reopen");
 
         // Node 3 out-degree = 2 (3->2 + 3->3)
@@ -1037,10 +898,8 @@ fn s10_churn_insert_delete_200_rounds() {
 
     {
         let db = Database::open(&path).unwrap();
-        db.execute("CREATE NODE TABLE Eph(id INT64, round INT64, PRIMARY KEY(id))")
-            .unwrap();
-        db.execute("CREATE REL TABLE EPH_LINK(FROM Eph TO Eph)")
-            .unwrap();
+        db.execute("CREATE NODE TABLE Eph(id INT64, round INT64, PRIMARY KEY(id))").unwrap();
+        db.execute("CREATE REL TABLE EPH_LINK(FROM Eph TO Eph)").unwrap();
 
         let mut next_id = 1_i64;
 
@@ -1050,11 +909,7 @@ fn s10_churn_insert_delete_200_rounds() {
             // Insert 10 nodes
             for j in 0..10 {
                 let id = base + j;
-                db.execute(&format!(
-                    "CREATE (n:Eph {{id: {}, round: {}}})",
-                    id, round
-                ))
-                .unwrap();
+                db.execute(&format!("CREATE (n:Eph {{id: {}, round: {}}})", id, round)).unwrap();
             }
             next_id += 10;
 
@@ -1071,10 +926,7 @@ fn s10_churn_insert_delete_200_rounds() {
 
             // Verify insertion: 10 nodes from this round
             let result = db
-                .query(&format!(
-                    "MATCH (n:Eph) WHERE n.round = {} RETURN COUNT(n)",
-                    round
-                ))
+                .query(&format!("MATCH (n:Eph) WHERE n.round = {} RETURN COUNT(n)", round))
                 .unwrap();
             assert_eq!(
                 result.rows()[0].get_int(0),
@@ -1086,19 +938,12 @@ fn s10_churn_insert_delete_200_rounds() {
             // Delete all 10 nodes (DETACH DELETE removes edges too)
             for j in 0..10 {
                 let id = base + j;
-                db.execute(&format!(
-                    "MATCH (n:Eph) WHERE n.id = {} DETACH DELETE n",
-                    id
-                ))
-                .unwrap();
+                db.execute(&format!("MATCH (n:Eph) WHERE n.id = {} DETACH DELETE n", id)).unwrap();
             }
 
             // Verify deletion: 0 nodes from this round
             let result = db
-                .query(&format!(
-                    "MATCH (n:Eph) WHERE n.round = {} RETURN COUNT(n)",
-                    round
-                ))
+                .query(&format!("MATCH (n:Eph) WHERE n.round = {} RETURN COUNT(n)", round))
                 .unwrap();
             assert_eq!(
                 result.rows()[0].get_int(0),
@@ -1121,14 +966,8 @@ fn s10_churn_insert_delete_200_rounds() {
             "graph should be empty after all churn rounds"
         );
 
-        let result = db
-            .query("MATCH (a:Eph)-[:EPH_LINK]->(b:Eph) RETURN COUNT(a)")
-            .unwrap();
-        assert_eq!(
-            result.rows()[0].get_int(0),
-            Some(0),
-            "no edges should remain"
-        );
+        let result = db.query("MATCH (a:Eph)-[:EPH_LINK]->(b:Eph) RETURN COUNT(a)").unwrap();
+        assert_eq!(result.rows()[0].get_int(0), Some(0), "no edges should remain");
 
         let issues = db.check();
         assert!(issues.is_empty(), "integrity issues after churn: {:?}", issues);
@@ -1141,20 +980,10 @@ fn s10_churn_insert_delete_200_rounds() {
         let db = Database::open(&path).unwrap();
 
         let result = db.query("MATCH (n:Eph) RETURN COUNT(n)").unwrap();
-        assert_eq!(
-            result.rows()[0].get_int(0),
-            Some(0),
-            "no ghost nodes after reopen"
-        );
+        assert_eq!(result.rows()[0].get_int(0), Some(0), "no ghost nodes after reopen");
 
-        let result = db
-            .query("MATCH (a:Eph)-[:EPH_LINK]->(b:Eph) RETURN COUNT(a)")
-            .unwrap();
-        assert_eq!(
-            result.rows()[0].get_int(0),
-            Some(0),
-            "no ghost edges after reopen"
-        );
+        let result = db.query("MATCH (a:Eph)-[:EPH_LINK]->(b:Eph) RETURN COUNT(a)").unwrap();
+        assert_eq!(result.rows()[0].get_int(0), Some(0), "no ghost edges after reopen");
 
         let issues = db.check();
         assert!(issues.is_empty(), "integrity issues after reopen: {:?}", issues);
@@ -1179,17 +1008,13 @@ fn s11_progressive_growth_10_sessions() {
             "CREATE NODE TABLE Batch(id INT64, session INT64, label STRING, PRIMARY KEY(id))",
         )
         .unwrap();
-        db.execute("CREATE NODE TABLE Anchor(id INT64, PRIMARY KEY(id))")
-            .unwrap();
-        db.execute("CREATE REL TABLE BATCH_LINK(FROM Batch TO Batch)")
-            .unwrap();
-        db.execute("CREATE REL TABLE TO_ANCHOR(FROM Batch TO Anchor)")
-            .unwrap();
+        db.execute("CREATE NODE TABLE Anchor(id INT64, PRIMARY KEY(id))").unwrap();
+        db.execute("CREATE REL TABLE BATCH_LINK(FROM Batch TO Batch)").unwrap();
+        db.execute("CREATE REL TABLE TO_ANCHOR(FROM Batch TO Anchor)").unwrap();
 
         // Create 10 anchor nodes (persistent targets for cross-batch edges)
         for i in 1..=10 {
-            db.execute(&format!("CREATE (n:Anchor {{id: {}}})", i))
-                .unwrap();
+            db.execute(&format!("CREATE (n:Anchor {{id: {}}})", i)).unwrap();
         }
     }
 
@@ -1266,10 +1091,7 @@ fn s11_progressive_growth_10_sessions() {
 
             // This session's nodes
             let result = db
-                .query(&format!(
-                    "MATCH (n:Batch) WHERE n.session = {} RETURN COUNT(n)",
-                    session
-                ))
+                .query(&format!("MATCH (n:Batch) WHERE n.session = {} RETURN COUNT(n)", session))
                 .unwrap();
             assert_eq!(
                 result.rows()[0].get_int(0),
@@ -1281,10 +1103,7 @@ fn s11_progressive_growth_10_sessions() {
             // Historical batches are still queryable
             for prev in 1..session {
                 let result = db
-                    .query(&format!(
-                        "MATCH (n:Batch) WHERE n.session = {} RETURN COUNT(n)",
-                        prev
-                    ))
+                    .query(&format!("MATCH (n:Batch) WHERE n.session = {} RETURN COUNT(n)", prev))
                     .unwrap();
                 assert_eq!(
                     result.rows()[0].get_int(0),
@@ -1297,20 +1116,13 @@ fn s11_progressive_growth_10_sessions() {
 
             // Spot-check: first node of this session
             let result = db
-                .query(&format!(
-                    "MATCH (n:Batch) WHERE n.id = {} RETURN n.label",
-                    batch_start
-                ))
+                .query(&format!("MATCH (n:Batch) WHERE n.id = {} RETURN n.label", batch_start))
                 .unwrap();
-            assert_eq!(
-                result.rows()[0].get_string(0),
-                Some(&*format!("sess{}_item0", session))
-            );
+            assert_eq!(result.rows()[0].get_string(0), Some(&*format!("sess{}_item0", session)));
 
             // Verify anchor links: should have `session` anchor connections total
-            let result = db
-                .query("MATCH (b:Batch)-[:TO_ANCHOR]->(a:Anchor) RETURN COUNT(b)")
-                .unwrap();
+            let result =
+                db.query("MATCH (b:Batch)-[:TO_ANCHOR]->(a:Anchor) RETURN COUNT(b)").unwrap();
             assert_eq!(
                 result.rows()[0].get_int(0),
                 Some(session),
@@ -1321,9 +1133,8 @@ fn s11_progressive_growth_10_sessions() {
 
             // Batch intra-edges: each session contributes 99, total = session * 99
             let expected_edges = session * 99;
-            let result = db
-                .query("MATCH (a:Batch)-[:BATCH_LINK]->(b:Batch) RETURN COUNT(a)")
-                .unwrap();
+            let result =
+                db.query("MATCH (a:Batch)-[:BATCH_LINK]->(b:Batch) RETURN COUNT(a)").unwrap();
             assert_eq!(
                 result.rows()[0].get_int(0),
                 Some(expected_edges),
@@ -1347,15 +1158,11 @@ fn s11_progressive_growth_10_sessions() {
         assert_eq!(result.rows()[0].get_int(0), Some(10));
 
         // 10 * 99 = 990 batch-link edges
-        let result = db
-            .query("MATCH (a:Batch)-[:BATCH_LINK]->(b:Batch) RETURN COUNT(a)")
-            .unwrap();
+        let result = db.query("MATCH (a:Batch)-[:BATCH_LINK]->(b:Batch) RETURN COUNT(a)").unwrap();
         assert_eq!(result.rows()[0].get_int(0), Some(990));
 
         // 10 anchor edges
-        let result = db
-            .query("MATCH (b:Batch)-[:TO_ANCHOR]->(a:Anchor) RETURN COUNT(b)")
-            .unwrap();
+        let result = db.query("MATCH (b:Batch)-[:TO_ANCHOR]->(a:Anchor) RETURN COUNT(b)").unwrap();
         assert_eq!(result.rows()[0].get_int(0), Some(10));
 
         let issues = db.check();

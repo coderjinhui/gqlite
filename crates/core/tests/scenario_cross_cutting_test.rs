@@ -47,14 +47,8 @@ fn create_ecommerce_schema(db: &Database) {
     db.execute("CREATE NODE TABLE Product(id INT64, name STRING, price DOUBLE, PRIMARY KEY(id))")
         .unwrap();
     // Purchase and Review as intermediary nodes for queryable edge properties.
-    db.execute(
-        "CREATE NODE TABLE Purchase(id INT64, amount DOUBLE, PRIMARY KEY(id))",
-    )
-    .unwrap();
-    db.execute(
-        "CREATE NODE TABLE Review(id INT64, rating INT64, PRIMARY KEY(id))",
-    )
-    .unwrap();
+    db.execute("CREATE NODE TABLE Purchase(id INT64, amount DOUBLE, PRIMARY KEY(id))").unwrap();
+    db.execute("CREATE NODE TABLE Review(id INT64, rating INT64, PRIMARY KEY(id))").unwrap();
 
     // Relationship tables
     db.execute("CREATE REL TABLE PURCHASED(FROM Customer TO Product)").unwrap();
@@ -170,11 +164,8 @@ fn insert_ecommerce_data(db: &Database) {
     for (idx, (cid, pid, rating)) in reviews.iter().enumerate() {
         let review_id = (idx + 1) as i64;
         // Create Review node with rating property
-        db.execute(&format!(
-            "CREATE (rev:Review {{id: {}, rating: {}}})",
-            review_id, rating
-        ))
-        .unwrap();
+        db.execute(&format!("CREATE (rev:Review {{id: {}, rating: {}}})", review_id, rating))
+            .unwrap();
         // Direct edge Customer -> Product
         db.execute(&format!(
             "MATCH (c:Customer), (p:Product) WHERE c.id = {} AND p.id = {} \
@@ -182,7 +173,7 @@ fn insert_ecommerce_data(db: &Database) {
             cid, pid
         ))
         .unwrap_or_else(|_| gqlite_core::QueryResult::empty()); // might already exist, ignore duplicate error
-        // Customer -> Review -> Product chain
+                                                                // Customer -> Review -> Product chain
         db.execute(&format!(
             "MATCH (c:Customer), (rev:Review) WHERE c.id = {} AND rev.id = {} \
              CREATE (c)-[:WROTE_REVIEW]->(rev)",
@@ -227,9 +218,7 @@ fn g01_file_restart_consistency() {
         let r = db.query("MATCH (p:Product) RETURN COUNT(p)").unwrap();
         product_count_before = r.rows()[0].get_int(0).unwrap();
 
-        let r = db
-            .query("MATCH (c:Customer)-[:PURCHASED]->(p:Product) RETURN COUNT(c)")
-            .unwrap();
+        let r = db.query("MATCH (c:Customer)-[:PURCHASED]->(p:Product) RETURN COUNT(c)").unwrap();
         purchased_count_before = r.rows()[0].get_int(0).unwrap();
 
         // Multi-hop: customers who purchased products also purchased by Customer1
@@ -248,15 +237,21 @@ fn g01_file_restart_consistency() {
         let db = Database::open(&path).unwrap();
 
         let r = db.query("MATCH (c:Customer) RETURN COUNT(c)").unwrap();
-        assert_eq!(r.rows()[0].get_int(0).unwrap(), customer_count_before, "customer count mismatch");
+        assert_eq!(
+            r.rows()[0].get_int(0).unwrap(),
+            customer_count_before,
+            "customer count mismatch"
+        );
 
         let r = db.query("MATCH (p:Product) RETURN COUNT(p)").unwrap();
         assert_eq!(r.rows()[0].get_int(0).unwrap(), product_count_before, "product count mismatch");
 
-        let r = db
-            .query("MATCH (c:Customer)-[:PURCHASED]->(p:Product) RETURN COUNT(c)")
-            .unwrap();
-        assert_eq!(r.rows()[0].get_int(0).unwrap(), purchased_count_before, "purchase count mismatch");
+        let r = db.query("MATCH (c:Customer)-[:PURCHASED]->(p:Product) RETURN COUNT(c)").unwrap();
+        assert_eq!(
+            r.rows()[0].get_int(0).unwrap(),
+            purchased_count_before,
+            "purchase count mismatch"
+        );
 
         let r = db
             .query(
@@ -266,7 +261,8 @@ fn g01_file_restart_consistency() {
             )
             .unwrap();
         assert_eq!(
-            r.num_rows() as i64, multi_hop_before,
+            r.num_rows() as i64,
+            multi_hop_before,
             "multi-hop query result mismatch after restart"
         );
 
@@ -311,8 +307,7 @@ fn g02_checkpoint_complex_query_consistency() {
              RETURN DISTINCT c2.id ORDER BY c2.id",
         )
         .unwrap();
-    let pre_path_ids: Vec<i64> =
-        r_pre_path.rows().iter().map(|r| r.get_int(0).unwrap()).collect();
+    let pre_path_ids: Vec<i64> = r_pre_path.rows().iter().map(|r| r.get_int(0).unwrap()).collect();
 
     // Checkpoint
     db.checkpoint().unwrap();
@@ -426,8 +421,7 @@ fn g03_wal_recovery_business_state() {
             .unwrap();
         }
         // Update a pre-checkpoint node
-        db.execute("MATCH (c:Customer) WHERE c.id = 1 SET c.name = 'UpdatedCust1'")
-            .unwrap();
+        db.execute("MATCH (c:Customer) WHERE c.id = 1 SET c.name = 'UpdatedCust1'").unwrap();
         // No checkpoint — WAL data only
     }
 
@@ -444,9 +438,7 @@ fn g03_wal_recovery_business_state() {
         assert_eq!(r.rows()[0].get_int(0).unwrap(), 10, "should recover all 10 products");
 
         // All 10 purchase relationships
-        let r = db
-            .query("MATCH (c:Customer)-[:PURCHASED]->(p:Product) RETURN COUNT(c)")
-            .unwrap();
+        let r = db.query("MATCH (c:Customer)-[:PURCHASED]->(p:Product) RETURN COUNT(c)").unwrap();
         assert_eq!(r.rows()[0].get_int(0).unwrap(), 10, "should recover all 10 purchases");
 
         // Pre-checkpoint customer spot check
@@ -571,9 +563,7 @@ fn g04_edge_property_filter_return_aggregate() {
     .unwrap();
 
     // Dijkstra reads edge properties — verifies they are correctly stored
-    let r = db
-        .query("CALL dijkstra(1, 3, 'ROAD', 'distance') YIELD path, cost")
-        .unwrap();
+    let r = db.query("CALL dijkstra(1, 3, 'ROAD', 'distance') YIELD path, cost").unwrap();
     assert_eq!(r.num_rows(), 1);
     assert_eq!(
         r.rows()[0].get_float(1).unwrap(),
@@ -598,9 +588,7 @@ fn g05_edge_delete_and_update() {
     assert!(c3_purchases_before > 0, "Customer3 should have purchases");
 
     // Pre-check: total PURCHASED edge count
-    let r = db
-        .query("MATCH (c:Customer)-[:PURCHASED]->(p:Product) RETURN COUNT(c)")
-        .unwrap();
+    let r = db.query("MATCH (c:Customer)-[:PURCHASED]->(p:Product) RETURN COUNT(c)").unwrap();
     let total_purchases_before = r.rows()[0].get_int(0).unwrap();
 
     // Pre-check: total customer count
@@ -622,7 +610,9 @@ fn g05_edge_delete_and_update() {
 
     // Verify Customer3's MADE_PURCHASE edges are gone
     let r = db
-        .query("MATCH (c:Customer)-[:MADE_PURCHASE]->(pur:Purchase) WHERE c.id = 3 RETURN COUNT(pur)")
+        .query(
+            "MATCH (c:Customer)-[:MADE_PURCHASE]->(pur:Purchase) WHERE c.id = 3 RETURN COUNT(pur)",
+        )
         .unwrap();
     assert_eq!(r.rows()[0].get_int(0).unwrap(), 0, "Customer3's purchase links should be removed");
 
@@ -635,9 +625,7 @@ fn g05_edge_delete_and_update() {
     );
 
     // Other customers' PURCHASED edges are intact
-    let r = db
-        .query("MATCH (c:Customer)-[:PURCHASED]->(p:Product) RETURN COUNT(c)")
-        .unwrap();
+    let r = db.query("MATCH (c:Customer)-[:PURCHASED]->(p:Product) RETURN COUNT(c)").unwrap();
     assert_eq!(
         r.rows()[0].get_int(0).unwrap(),
         total_purchases_before - c3_purchases_before,
@@ -649,8 +637,7 @@ fn g05_edge_delete_and_update() {
     assert_eq!(r.rows()[0].get_int(0).unwrap(), 10, "products should not be affected");
 
     // Test node property update (SET) — update Customer1's name
-    db.execute("MATCH (c:Customer) WHERE c.id = 1 SET c.name = 'VIP_Customer1'")
-        .unwrap();
+    db.execute("MATCH (c:Customer) WHERE c.id = 1 SET c.name = 'VIP_Customer1'").unwrap();
     let r = db.query("MATCH (c:Customer) WHERE c.id = 1 RETURN c.name").unwrap();
     assert_eq!(r.rows()[0].get_string(0).unwrap(), "VIP_Customer1");
 
@@ -658,10 +645,7 @@ fn g05_edge_delete_and_update() {
     let r = db
         .query("MATCH (c:Customer)-[:PURCHASED]->(p:Product) WHERE c.id = 1 RETURN COUNT(p)")
         .unwrap();
-    assert!(
-        r.rows()[0].get_int(0).unwrap() > 0,
-        "Customer1's purchases should survive after SET"
-    );
+    assert!(r.rows()[0].get_int(0).unwrap() > 0, "Customer1's purchases should survive after SET");
 
     let issues = db.check();
     assert!(issues.is_empty(), "integrity issues after edge operations: {:?}", issues);
@@ -764,11 +748,7 @@ fn g07_dense_subgraph_clique() {
     // Create 10-node clique: all pairs connected (directed)
     let clique_size = 10;
     for i in 1..=clique_size {
-        db.execute(&format!(
-            "CREATE (p:Person {{id: {}, name: 'P{}'}})",
-            i, i
-        ))
-        .unwrap();
+        db.execute(&format!("CREATE (p:Person {{id: {}, name: 'P{}'}})", i, i)).unwrap();
     }
 
     // Create all directed edges (i -> j for i != j)
@@ -792,9 +772,7 @@ fn g07_dense_subgraph_clique() {
     assert_eq!(r.rows()[0].get_int(0).unwrap(), clique_size);
 
     // Verify edge count: n*(n-1) = 10*9 = 90
-    let r = db
-        .query("MATCH (a:Person)-[:KNOWS]->(b:Person) RETURN COUNT(a)")
-        .unwrap();
+    let r = db.query("MATCH (a:Person)-[:KNOWS]->(b:Person) RETURN COUNT(a)").unwrap();
     assert_eq!(r.rows()[0].get_int(0).unwrap(), edge_count);
 
     // Variable-length path: from P1, 1 hop should reach all other 9 nodes
@@ -815,11 +793,7 @@ fn g07_dense_subgraph_clique() {
              RETURN DISTINCT b.id ORDER BY b.id",
         )
         .unwrap();
-    assert_eq!(
-        r.num_rows(),
-        9,
-        "P1 should reach all 9 other nodes within 2 hops in clique"
-    );
+    assert_eq!(r.num_rows(), 9, "P1 should reach all 9 other nodes within 2 hops in clique");
 
     // Count all edges: should be n*(n-1) = 90
     let r = db
@@ -900,11 +874,7 @@ fn g08_wide_schema_nulls_long_strings() {
 
         // Row 3: mostly NULLs, only id and one long string
         let very_long: String = "X".repeat(5000);
-        db.execute(&format!(
-            "CREATE (n:WideNode {{id: 3, col_str1: '{}'}})",
-            very_long
-        ))
-        .unwrap();
+        db.execute(&format!("CREATE (n:WideNode {{id: 3, col_str1: '{}'}})", very_long)).unwrap();
 
         // Row 4: all numeric, no strings (except id)
         db.execute(
@@ -938,7 +908,7 @@ fn g08_wide_schema_nulls_long_strings() {
         let s = r.rows()[0].get_string(0).unwrap();
         assert_eq!(s.len(), 2000, "long string should be 2000 chars");
         assert_eq!(r.rows()[0].get_int(1).unwrap(), 100);
-        assert_eq!(r.rows()[0].get_bool(2).unwrap(), true);
+        assert!(r.rows()[0].get_bool(2).unwrap());
 
         // Row 2: verify NULLs
         let r = db
@@ -951,9 +921,8 @@ fn g08_wide_schema_nulls_long_strings() {
         assert!(r.rows()[0].values[3].is_null(), "col_bool2 should be NULL for row 2");
 
         // Row 3: mostly NULLs, long string preserved
-        let r = db
-            .query("MATCH (n:WideNode) WHERE n.id = 3 RETURN n.col_str1, n.col_int1")
-            .unwrap();
+        let r =
+            db.query("MATCH (n:WideNode) WHERE n.id = 3 RETURN n.col_str1, n.col_int1").unwrap();
         assert_eq!(r.num_rows(), 1);
         let s = r.rows()[0].get_string(0).unwrap();
         assert_eq!(s.len(), 5000, "very long string should be 5000 chars");
@@ -1040,9 +1009,7 @@ fn g09_merge_idempotent_import() {
     assert_eq!(r.rows()[0].get_int(0).unwrap(), 3, "MERGE should not create duplicates");
 
     // ON MATCH SET should have updated email to v2
-    let r = db
-        .query("MATCH (c:Customer) WHERE c.id = 1 RETURN c.email")
-        .unwrap();
+    let r = db.query("MATCH (c:Customer) WHERE c.id = 1 RETURN c.email").unwrap();
     assert_eq!(
         r.rows()[0].get_string(0).unwrap(),
         "cust1@v2.com",
@@ -1050,9 +1017,7 @@ fn g09_merge_idempotent_import() {
     );
 
     // ON MATCH SET should have updated price
-    let r = db
-        .query("MATCH (p:Product) WHERE p.id = 2 RETURN p.price")
-        .unwrap();
+    let r = db.query("MATCH (p:Product) WHERE p.id = 2 RETURN p.price").unwrap();
     assert!(
         (r.rows()[0].get_float(0).unwrap() - 40.0).abs() < 0.01,
         "ON MATCH SET should update price to 40.0"
@@ -1063,11 +1028,7 @@ fn g09_merge_idempotent_import() {
         db.execute(&format!("MERGE (c:Customer {{id: {}, name: 'Cust{}'}})", i, i)).unwrap();
     }
     let r = db.query("MATCH (c:Customer) RETURN COUNT(c)").unwrap();
-    assert_eq!(
-        r.rows()[0].get_int(0).unwrap(),
-        5,
-        "third MERGE replay should still be idempotent"
-    );
+    assert_eq!(r.rows()[0].get_int(0).unwrap(), 5, "third MERGE replay should still be idempotent");
 
     // MERGE with a new customer — should create
     db.execute("MERGE (c:Customer {id: 6, name: 'Cust6'}) ON CREATE SET c.email = 'new@shop.com'")
@@ -1282,23 +1243,15 @@ fn g11_multi_tenant_isolation() {
     assert_eq!(r.num_rows(), 10, "org1 should have 10 users");
     for row in r.rows() {
         let name = row.get_string(0).unwrap();
-        assert!(
-            name.starts_with("Org1_"),
-            "org1 query returned non-org1 user: {}",
-            name
-        );
+        assert!(name.starts_with("Org1_"), "org1 query returned non-org1 user: {}", name);
     }
 
     // Org2 user query
-    let r = db
-        .query("MATCH (u:TenantUser) WHERE u.org_id = 2 RETURN COUNT(u)")
-        .unwrap();
+    let r = db.query("MATCH (u:TenantUser) WHERE u.org_id = 2 RETURN COUNT(u)").unwrap();
     assert_eq!(r.rows()[0].get_int(0).unwrap(), 8, "org2 should have 8 users");
 
     // Org3 user query
-    let r = db
-        .query("MATCH (u:TenantUser) WHERE u.org_id = 3 RETURN COUNT(u)")
-        .unwrap();
+    let r = db.query("MATCH (u:TenantUser) WHERE u.org_id = 3 RETURN COUNT(u)").unwrap();
     assert_eq!(r.rows()[0].get_int(0).unwrap(), 5, "org3 should have 5 users");
 
     // Cross-check: org1 projects should not appear in org2 project query
@@ -1327,11 +1280,7 @@ fn g11_multi_tenant_isolation() {
         )
         .unwrap();
     assert_eq!(r.num_rows(), 1, "org1 users should only work on projects of one org");
-    assert_eq!(
-        r.rows()[0].get_int(0).unwrap(),
-        1,
-        "org1 users should only work on org1 projects"
-    );
+    assert_eq!(r.rows()[0].get_int(0).unwrap(), 1, "org1 users should only work on org1 projects");
 
     // Relationship isolation: org2 users' WORKS_ON should only connect to org2 projects
     let r = db
@@ -1342,11 +1291,7 @@ fn g11_multi_tenant_isolation() {
         )
         .unwrap();
     assert_eq!(r.num_rows(), 1, "org2 users should only work on projects of one org");
-    assert_eq!(
-        r.rows()[0].get_int(0).unwrap(),
-        2,
-        "org2 users should only work on org2 projects"
-    );
+    assert_eq!(r.rows()[0].get_int(0).unwrap(), 2, "org2 users should only work on org2 projects");
 
     // Aggregation scoped to tenant: admin count per org
     let r = db
@@ -1367,11 +1312,7 @@ fn g11_multi_tenant_isolation() {
 
     // Total across all tenants (sanity check)
     let r = db.query("MATCH (u:TenantUser) RETURN COUNT(u)").unwrap();
-    assert_eq!(
-        r.rows()[0].get_int(0).unwrap(),
-        23,
-        "total users across all orgs should be 23"
-    );
+    assert_eq!(r.rows()[0].get_int(0).unwrap(), 23, "total users across all orgs should be 23");
 
     let issues = db.check();
     assert!(issues.is_empty(), "integrity issues in multi-tenant setup: {:?}", issues);
@@ -1418,16 +1359,10 @@ fn g12_transaction_rollback_mid_batch() {
 
         // Verify rollback: still only 5 items
         let r = db.query("MATCH (n:Item) RETURN COUNT(n)").unwrap();
-        assert_eq!(
-            r.rows()[0].get_int(0).unwrap(),
-            5,
-            "rolled-back batch2 should not persist"
-        );
+        assert_eq!(r.rows()[0].get_int(0).unwrap(), 5, "rolled-back batch2 should not persist");
 
         // Verify none of batch2 items exist
-        let r = db
-            .query("MATCH (n:Item) WHERE n.batch = 'batch2' RETURN n.id")
-            .unwrap();
+        let r = db.query("MATCH (n:Item) WHERE n.batch = 'batch2' RETURN n.id").unwrap();
         assert_eq!(r.num_rows(), 0, "batch2 items should not exist after rollback");
 
         // Batch 3: committed after the rollback
@@ -1440,11 +1375,7 @@ fn g12_transaction_rollback_mid_batch() {
         .unwrap();
 
         let r = db.query("MATCH (n:Item) RETURN COUNT(n)").unwrap();
-        assert_eq!(
-            r.rows()[0].get_int(0).unwrap(),
-            7,
-            "batch1 + batch3 = 7 items"
-        );
+        assert_eq!(r.rows()[0].get_int(0).unwrap(), 7, "batch1 + batch3 = 7 items");
     }
 
     // Reopen and verify persistence
@@ -1460,33 +1391,27 @@ fn g12_transaction_rollback_mid_batch() {
         );
 
         // batch2 still absent
-        let r = db
-            .query("MATCH (n:Item) WHERE n.batch = 'batch2' RETURN n.id")
-            .unwrap();
+        let r = db.query("MATCH (n:Item) WHERE n.batch = 'batch2' RETURN n.id").unwrap();
         assert_eq!(r.num_rows(), 0, "batch2 should not exist after reopen");
 
         // Verify batch1 items are all present
-        let r = db
-            .query("MATCH (n:Item) WHERE n.batch = 'batch1' RETURN n.id ORDER BY n.id")
-            .unwrap();
+        let r =
+            db.query("MATCH (n:Item) WHERE n.batch = 'batch1' RETURN n.id ORDER BY n.id").unwrap();
         assert_eq!(r.num_rows(), 5);
         for (i, row) in r.rows().iter().enumerate() {
             assert_eq!(row.get_int(0).unwrap(), (i + 1) as i64);
         }
 
         // Verify batch3 items are present
-        let r = db
-            .query("MATCH (n:Item) WHERE n.batch = 'batch3' RETURN n.id ORDER BY n.id")
-            .unwrap();
+        let r =
+            db.query("MATCH (n:Item) WHERE n.batch = 'batch3' RETURN n.id ORDER BY n.id").unwrap();
         assert_eq!(r.num_rows(), 2);
         assert_eq!(r.rows()[0].get_int(0).unwrap(), 9);
         assert_eq!(r.rows()[1].get_int(0).unwrap(), 10);
 
         // No polluted state — IDs 6, 7, 8 should not exist
         for id in [6, 7, 8] {
-            let r = db
-                .query(&format!("MATCH (n:Item) WHERE n.id = {} RETURN n.id", id))
-                .unwrap();
+            let r = db.query(&format!("MATCH (n:Item) WHERE n.id = {} RETURN n.id", id)).unwrap();
             assert_eq!(r.num_rows(), 0, "rolled-back item id={} should not exist", id);
         }
 

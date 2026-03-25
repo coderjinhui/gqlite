@@ -28,12 +28,10 @@ fn e01_conversion_funnel() {
     let db = Database::in_memory();
 
     // -- Schema
-    db.execute("CREATE NODE TABLE Customer(id INT64, name STRING, PRIMARY KEY(id))")
-        .unwrap();
+    db.execute("CREATE NODE TABLE Customer(id INT64, name STRING, PRIMARY KEY(id))").unwrap();
     db.execute("CREATE NODE TABLE Product(id INT64, name STRING, price DOUBLE, PRIMARY KEY(id))")
         .unwrap();
-    db.execute("CREATE NODE TABLE Cart(id INT64, customer_id INT64, PRIMARY KEY(id))")
-        .unwrap();
+    db.execute("CREATE NODE TABLE Cart(id INT64, customer_id INT64, PRIMARY KEY(id))").unwrap();
     db.execute(
         "CREATE NODE TABLE PurchaseOrder(id INT64, customer_id INT64, status STRING, PRIMARY KEY(id))",
     )
@@ -51,14 +49,9 @@ fn e01_conversion_funnel() {
 
     // -- 10 customers, 3 products
     for i in 1..=10 {
-        db.execute(&format!(
-            "CREATE (c:Customer {{id: {}, name: 'Cust{}'}})",
-            i, i
-        ))
-        .unwrap();
+        db.execute(&format!("CREATE (c:Customer {{id: {}, name: 'Cust{}'}})", i, i)).unwrap();
     }
-    for (id, name, price) in [(1, "Laptop", 4999.0), (2, "Phone", 2999.0), (3, "Tablet", 1999.0)]
-    {
+    for (id, name, price) in [(1, "Laptop", 4999.0), (2, "Phone", 2999.0), (3, "Tablet", 1999.0)] {
         db.execute(&format!(
             "CREATE (p:Product {{id: {}, name: '{}', price: {}}})",
             id, name, price
@@ -190,10 +183,8 @@ fn e01_conversion_funnel() {
 fn e02_review_and_rating() {
     let db = Database::in_memory();
 
-    db.execute("CREATE NODE TABLE Customer(id INT64, name STRING, PRIMARY KEY(id))")
-        .unwrap();
-    db.execute("CREATE NODE TABLE Product(id INT64, name STRING, PRIMARY KEY(id))")
-        .unwrap();
+    db.execute("CREATE NODE TABLE Customer(id INT64, name STRING, PRIMARY KEY(id))").unwrap();
+    db.execute("CREATE NODE TABLE Product(id INT64, name STRING, PRIMARY KEY(id))").unwrap();
     // Use Review as a node to make rating queryable (edge properties not accessible in RETURN)
     db.execute(
         "CREATE NODE TABLE Review(id INT64, customer_id INT64, product_id INT64, rating INT64, ts INT64, PRIMARY KEY(id))",
@@ -204,11 +195,7 @@ fn e02_review_and_rating() {
 
     // 5 customers, 3 products
     for i in 1..=5 {
-        db.execute(&format!(
-            "CREATE (c:Customer {{id: {}, name: 'Cust{}'}})",
-            i, i
-        ))
-        .unwrap();
+        db.execute(&format!("CREATE (c:Customer {{id: {}, name: 'Cust{}'}})", i, i)).unwrap();
     }
     for (id, name) in [(1, "Laptop"), (2, "Phone"), (3, "Tablet")] {
         db.execute(&format!("CREATE (p:Product {{id: {}, name: '{}'}})", id, name)).unwrap();
@@ -256,11 +243,7 @@ fn e02_review_and_rating() {
         )
         .unwrap();
     let avg_rating = r.rows()[0].get_float(0).unwrap();
-    assert!(
-        (avg_rating - 3.0).abs() < 0.01,
-        "Laptop avg rating should be 3.0, got {}",
-        avg_rating
-    );
+    assert!((avg_rating - 3.0).abs() < 0.01, "Laptop avg rating should be 3.0, got {}", avg_rating);
 
     // Average rating for Phone (product 2): (5+5+4)/3 ≈ 4.67
     let r = db
@@ -305,12 +288,7 @@ fn e02_review_and_rating() {
     let mut rating_rows: Vec<(String, f64)> = r
         .rows()
         .iter()
-        .map(|row| {
-            (
-                row.get_string(0).unwrap().to_string(),
-                row.get_float(1).unwrap(),
-            )
-        })
+        .map(|row| (row.get_string(0).unwrap().to_string(), row.get_float(1).unwrap()))
         .collect();
     rating_rows.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
     // Phone (4.67) > Laptop (3.0) > Tablet (2.5)
@@ -347,12 +325,9 @@ fn e02_review_and_rating() {
 fn e03_order_line_items() {
     let db = Database::in_memory();
 
-    db.execute(
-        "CREATE NODE TABLE PurchaseOrder(id INT64, status STRING, PRIMARY KEY(id))",
-    )
-    .unwrap();
-    db.execute("CREATE NODE TABLE Product(id INT64, name STRING, PRIMARY KEY(id))")
+    db.execute("CREATE NODE TABLE PurchaseOrder(id INT64, status STRING, PRIMARY KEY(id))")
         .unwrap();
+    db.execute("CREATE NODE TABLE Product(id INT64, name STRING, PRIMARY KEY(id))").unwrap();
     // OrderItem as node to make qty/unit_price/discount queryable
     db.execute(
         "CREATE NODE TABLE OrderItem(id INT64, order_id INT64, product_id INT64, \
@@ -375,11 +350,8 @@ fn e03_order_line_items() {
     // Item 2: 2x Mouse @ 99.0, discount 0.0 => 99 * 2 = 198.0
     // Item 3: 1x Keyboard @ 199.0, discount 0.05 => 199 * 1 * 0.95 = 189.05
     // Total = 4499.1 + 198.0 + 189.05 = 4886.15
-    let items = [
-        (1, 101, 1, 1, 4999.0, 0.1),
-        (2, 101, 2, 2, 99.0, 0.0),
-        (3, 101, 3, 1, 199.0, 0.05),
-    ];
+    let items =
+        [(1, 101, 1, 1, 4999.0, 0.1), (2, 101, 2, 2, 99.0, 0.0), (3, 101, 3, 1, 199.0, 0.05)];
     for (iid, oid, pid, qty, price, discount) in &items {
         db.execute(&format!(
             "CREATE (item:OrderItem {{id: {}, order_id: {}, product_id: {}, \
@@ -420,11 +392,7 @@ fn e03_order_line_items() {
         )
         .unwrap();
     let total = r.rows()[0].get_float(0).unwrap();
-    assert!(
-        (total - 4886.15).abs() < 0.01,
-        "order total should be 4886.15, got {}",
-        total
-    );
+    assert!((total - 4886.15).abs() < 0.01, "order total should be 4886.15, got {}", total);
 
     // Verify per-item subtotals
     let r = db
@@ -514,16 +482,12 @@ fn e04_refund_and_cancel() {
     );
 
     // Refund order 1: update payment status to 'refunded', order status to 'refunded'
-    db.execute("MATCH (p:Payment) WHERE p.id = 101 SET p.status = 'refunded'")
-        .unwrap();
-    db.execute("MATCH (o:PurchaseOrder) WHERE o.id = 1 SET o.status = 'refunded'")
-        .unwrap();
+    db.execute("MATCH (p:Payment) WHERE p.id = 101 SET p.status = 'refunded'").unwrap();
+    db.execute("MATCH (o:PurchaseOrder) WHERE o.id = 1 SET o.status = 'refunded'").unwrap();
 
     // Cancel order 2: update payment status to 'cancelled', order status to 'cancelled'
-    db.execute("MATCH (p:Payment) WHERE p.id = 102 SET p.status = 'cancelled'")
-        .unwrap();
-    db.execute("MATCH (o:PurchaseOrder) WHERE o.id = 2 SET o.status = 'cancelled'")
-        .unwrap();
+    db.execute("MATCH (p:Payment) WHERE p.id = 102 SET p.status = 'cancelled'").unwrap();
+    db.execute("MATCH (o:PurchaseOrder) WHERE o.id = 2 SET o.status = 'cancelled'").unwrap();
 
     // After refund/cancel: only order 3 has captured payment = 200
     let r = db
@@ -541,28 +505,20 @@ fn e04_refund_and_cancel() {
     );
 
     // Verify order statuses
-    let r = db
-        .query("MATCH (o:PurchaseOrder) WHERE o.status = 'refunded' RETURN count(o)")
-        .unwrap();
+    let r =
+        db.query("MATCH (o:PurchaseOrder) WHERE o.status = 'refunded' RETURN count(o)").unwrap();
     assert_eq!(r.rows()[0].get_int(0).unwrap(), 1);
 
-    let r = db
-        .query("MATCH (o:PurchaseOrder) WHERE o.status = 'cancelled' RETURN count(o)")
-        .unwrap();
+    let r =
+        db.query("MATCH (o:PurchaseOrder) WHERE o.status = 'cancelled' RETURN count(o)").unwrap();
     assert_eq!(r.rows()[0].get_int(0).unwrap(), 1);
 
-    let r = db
-        .query("MATCH (o:PurchaseOrder) WHERE o.status = 'paid' RETURN count(o)")
-        .unwrap();
+    let r = db.query("MATCH (o:PurchaseOrder) WHERE o.status = 'paid' RETURN count(o)").unwrap();
     assert_eq!(r.rows()[0].get_int(0).unwrap(), 1);
 
     // Revenue delta = 1000 - 200 = 800
     let delta = revenue_before - revenue_after;
-    assert!(
-        (delta - 800.0).abs() < 0.01,
-        "revenue delta should be 800, got {}",
-        delta
-    );
+    assert!((delta - 800.0).abs() < 0.01, "revenue delta should be 800, got {}", delta);
 }
 
 // ============================================================
@@ -584,8 +540,7 @@ fn e05_multiple_payment_attempts() {
     db.execute("CREATE REL TABLE PAID_WITH(FROM PurchaseOrder TO Payment)").unwrap();
 
     // Order: $1000
-    db.execute("CREATE (o:PurchaseOrder {id: 1, status: 'pending', total: 1000.0})")
-        .unwrap();
+    db.execute("CREATE (o:PurchaseOrder {id: 1, status: 'pending', total: 1000.0})").unwrap();
 
     // Attempt 1: authorization failed
     db.execute("CREATE (p:Payment {id: 201, attempt: 1, status: 'auth_failed', amount: 1000.0})")
@@ -615,14 +570,11 @@ fn e05_multiple_payment_attempts() {
     .unwrap();
 
     // Update order status
-    db.execute("MATCH (o:PurchaseOrder) WHERE o.id = 1 SET o.status = 'paid'")
-        .unwrap();
+    db.execute("MATCH (o:PurchaseOrder) WHERE o.id = 1 SET o.status = 'paid'").unwrap();
 
     // Partial refund: $300
-    db.execute(
-        "CREATE (p:Payment {id: 204, attempt: 4, status: 'partial_refund', amount: 300.0})",
-    )
-    .unwrap();
+    db.execute("CREATE (p:Payment {id: 204, attempt: 4, status: 'partial_refund', amount: 300.0})")
+        .unwrap();
     db.execute(
         "MATCH (o:PurchaseOrder), (p:Payment) WHERE o.id = 1 AND p.id = 204 \
          CREATE (o)-[:PAID_WITH]->(p)",
@@ -648,11 +600,7 @@ fn e05_multiple_payment_attempts() {
         )
         .unwrap();
     let captured = r.rows()[0].get_float(0).unwrap();
-    assert!(
-        (captured - 1000.0).abs() < 0.01,
-        "captured revenue should be 1000, got {}",
-        captured
-    );
+    assert!((captured - 1000.0).abs() < 0.01, "captured revenue should be 1000, got {}", captured);
 
     // Net revenue = captured - refund = 1000 - 300 = 700
     let r = db
@@ -664,11 +612,7 @@ fn e05_multiple_payment_attempts() {
         .unwrap();
     let refunded = r.rows()[0].get_float(0).unwrap();
     let net = captured - refunded;
-    assert!(
-        (net - 700.0).abs() < 0.01,
-        "net revenue should be 700, got {}",
-        net
-    );
+    assert!((net - 700.0).abs() < 0.01, "net revenue should be 700, got {}", net);
 
     // Failed attempts should not count
     let r = db
@@ -689,10 +633,8 @@ fn e05_multiple_payment_attempts() {
 fn e06_multi_warehouse_fulfillment() {
     let db = Database::in_memory();
 
-    db.execute(
-        "CREATE NODE TABLE PurchaseOrder(id INT64, status STRING, PRIMARY KEY(id))",
-    )
-    .unwrap();
+    db.execute("CREATE NODE TABLE PurchaseOrder(id INT64, status STRING, PRIMARY KEY(id))")
+        .unwrap();
     db.execute(
         "CREATE NODE TABLE Shipment(id INT64, order_id INT64, status STRING, warehouse STRING, items_count INT64, PRIMARY KEY(id))",
     )
@@ -799,10 +741,8 @@ fn e06_multi_warehouse_fulfillment() {
     assert!(total > delivered, "not fully delivered yet");
 
     // Now deliver remaining shipments
-    db.execute("MATCH (s:Shipment) WHERE s.id = 301 SET s.status = 'delivered'")
-        .unwrap();
-    db.execute("MATCH (s:Shipment) WHERE s.id = 302 SET s.status = 'delivered'")
-        .unwrap();
+    db.execute("MATCH (s:Shipment) WHERE s.id = 301 SET s.status = 'delivered'").unwrap();
+    db.execute("MATCH (s:Shipment) WHERE s.id = 302 SET s.status = 'delivered'").unwrap();
 
     // Now all delivered
     let r = db
@@ -812,18 +752,11 @@ fn e06_multi_warehouse_fulfillment() {
              RETURN count(s)",
         )
         .unwrap();
-    assert_eq!(
-        r.rows()[0].get_int(0).unwrap(),
-        3,
-        "all 3 should be delivered now"
-    );
+    assert_eq!(r.rows()[0].get_int(0).unwrap(), 3, "all 3 should be delivered now");
 
     // Update order status to 'completed'
-    db.execute("MATCH (o:PurchaseOrder) WHERE o.id = 1 SET o.status = 'completed'")
-        .unwrap();
-    let r = db
-        .query("MATCH (o:PurchaseOrder) WHERE o.id = 1 RETURN o.status")
-        .unwrap();
+    db.execute("MATCH (o:PurchaseOrder) WHERE o.id = 1 SET o.status = 'completed'").unwrap();
+    let r = db.query("MATCH (o:PurchaseOrder) WHERE o.id = 1 RETURN o.status").unwrap();
     assert_eq!(r.rows()[0].get_string(0).unwrap(), "completed");
 }
 
@@ -835,21 +768,18 @@ fn e06_multi_warehouse_fulfillment() {
 fn e07_interest_graph_recommendation() {
     let db = Database::in_memory();
 
-    db.execute("CREATE NODE TABLE Customer(id INT64, name STRING, PRIMARY KEY(id))")
-        .unwrap();
-    db.execute("CREATE NODE TABLE Product(id INT64, name STRING, category STRING, PRIMARY KEY(id))")
-        .unwrap();
+    db.execute("CREATE NODE TABLE Customer(id INT64, name STRING, PRIMARY KEY(id))").unwrap();
+    db.execute(
+        "CREATE NODE TABLE Product(id INT64, name STRING, category STRING, PRIMARY KEY(id))",
+    )
+    .unwrap();
     db.execute("CREATE REL TABLE VIEWED(FROM Customer TO Product, ts INT64)").unwrap();
     db.execute("CREATE REL TABLE PURCHASED(FROM Customer TO Product)").unwrap();
     db.execute("CREATE REL TABLE REVIEWED_P(FROM Customer TO Product)").unwrap();
 
     // 5 customers, 6 products
     for i in 1..=5 {
-        db.execute(&format!(
-            "CREATE (c:Customer {{id: {}, name: 'Cust{}'}})",
-            i, i
-        ))
-        .unwrap();
+        db.execute(&format!("CREATE (c:Customer {{id: {}, name: 'Cust{}'}})", i, i)).unwrap();
     }
     let products = [
         (1, "Laptop", "Electronics"),
@@ -967,8 +897,7 @@ fn e07_interest_graph_recommendation() {
 fn e08_membership_and_coupon() {
     let db = Database::in_memory();
 
-    db.execute("CREATE NODE TABLE Customer(id INT64, name STRING, PRIMARY KEY(id))")
-        .unwrap();
+    db.execute("CREATE NODE TABLE Customer(id INT64, name STRING, PRIMARY KEY(id))").unwrap();
     db.execute(
         "CREATE NODE TABLE MemberLevel(id INT64, name STRING, min_spend DOUBLE, PRIMARY KEY(id))",
     )
@@ -981,35 +910,20 @@ fn e08_membership_and_coupon() {
     db.execute("CREATE REL TABLE HAS_COUPON(FROM MemberLevel TO Coupon)").unwrap();
 
     // Member levels: Bronze(1), Silver(2), Gold(3)
-    db.execute(
-        "CREATE (m:MemberLevel {id: 1, name: 'Bronze', min_spend: 0.0})",
-    )
-    .unwrap();
-    db.execute(
-        "CREATE (m:MemberLevel {id: 2, name: 'Silver', min_spend: 1000.0})",
-    )
-    .unwrap();
-    db.execute(
-        "CREATE (m:MemberLevel {id: 3, name: 'Gold', min_spend: 5000.0})",
-    )
-    .unwrap();
+    db.execute("CREATE (m:MemberLevel {id: 1, name: 'Bronze', min_spend: 0.0})").unwrap();
+    db.execute("CREATE (m:MemberLevel {id: 2, name: 'Silver', min_spend: 1000.0})").unwrap();
+    db.execute("CREATE (m:MemberLevel {id: 3, name: 'Gold', min_spend: 5000.0})").unwrap();
 
     // Coupons
     // Bronze coupon: 5% off (all members)
-    db.execute(
-        "CREATE (c:Coupon {id: 1, code: 'BRONZE5', discount_pct: 5.0, min_level: 1})",
-    )
-    .unwrap();
+    db.execute("CREATE (c:Coupon {id: 1, code: 'BRONZE5', discount_pct: 5.0, min_level: 1})")
+        .unwrap();
     // Silver coupon: 10% off
-    db.execute(
-        "CREATE (c:Coupon {id: 2, code: 'SILVER10', discount_pct: 10.0, min_level: 2})",
-    )
-    .unwrap();
+    db.execute("CREATE (c:Coupon {id: 2, code: 'SILVER10', discount_pct: 10.0, min_level: 2})")
+        .unwrap();
     // Gold coupon: 20% off
-    db.execute(
-        "CREATE (c:Coupon {id: 3, code: 'GOLD20', discount_pct: 20.0, min_level: 3})",
-    )
-    .unwrap();
+    db.execute("CREATE (c:Coupon {id: 3, code: 'GOLD20', discount_pct: 20.0, min_level: 3})")
+        .unwrap();
 
     // Link coupons to levels
     // Bronze level gets Bronze coupon
@@ -1111,11 +1025,7 @@ fn e08_membership_and_coupon() {
         )
         .unwrap();
     let max_disc = r.rows()[0].get_float(0).unwrap();
-    assert!(
-        (max_disc - 20.0).abs() < 0.01,
-        "Alice max discount should be 20%, got {}",
-        max_disc
-    );
+    assert!((max_disc - 20.0).abs() < 0.01, "Alice max discount should be 20%, got {}", max_disc);
 
     // Verify member level name through traversal
     let r = db
@@ -1136,10 +1046,8 @@ fn e08_membership_and_coupon() {
 fn e09_hot_product_views() {
     let db = Database::in_memory();
 
-    db.execute("CREATE NODE TABLE Customer(id INT64, name STRING, PRIMARY KEY(id))")
-        .unwrap();
-    db.execute("CREATE NODE TABLE Product(id INT64, name STRING, PRIMARY KEY(id))")
-        .unwrap();
+    db.execute("CREATE NODE TABLE Customer(id INT64, name STRING, PRIMARY KEY(id))").unwrap();
+    db.execute("CREATE NODE TABLE Product(id INT64, name STRING, PRIMARY KEY(id))").unwrap();
     db.execute("CREATE REL TABLE VIEWED(FROM Customer TO Product, ts INT64)").unwrap();
     db.execute("CREATE REL TABLE PURCHASED(FROM Customer TO Product)").unwrap();
 
@@ -1150,11 +1058,7 @@ fn e09_hot_product_views() {
 
     // 600 customers — use batches for speed
     for i in 1..=600 {
-        db.execute(&format!(
-            "CREATE (c:Customer {{id: {}, name: 'C{}'}})",
-            i, i
-        ))
-        .unwrap();
+        db.execute(&format!("CREATE (c:Customer {{id: {}, name: 'C{}'}})", i, i)).unwrap();
     }
 
     // HotItem: 500+ views (customers 1..=550 view it)
@@ -1227,12 +1131,7 @@ fn e09_hot_product_views() {
     let mut view_rows: Vec<(String, i64)> = r
         .rows()
         .iter()
-        .map(|row| {
-            (
-                row.get_string(0).unwrap().to_string(),
-                row.get_int(1).unwrap(),
-            )
-        })
+        .map(|row| (row.get_string(0).unwrap().to_string(), row.get_int(1).unwrap()))
         .collect();
     view_rows.sort_by(|a, b| b.1.cmp(&a.1));
     assert_eq!(view_rows[0].0, "HotItem");
@@ -1256,12 +1155,7 @@ fn e09_hot_product_views() {
     let mut purchase_rows: Vec<(String, i64)> = r
         .rows()
         .iter()
-        .map(|row| {
-            (
-                row.get_string(0).unwrap().to_string(),
-                row.get_int(1).unwrap(),
-            )
-        })
+        .map(|row| (row.get_string(0).unwrap().to_string(), row.get_int(1).unwrap()))
         .collect();
     purchase_rows.sort_by(|a, b| b.1.cmp(&a.1));
     assert_eq!(purchase_rows[0].0, "HotItem");
@@ -1294,10 +1188,8 @@ fn e09_hot_product_views() {
 fn e10_after_sales_service_chain() {
     let db = Database::in_memory();
 
-    db.execute(
-        "CREATE NODE TABLE PurchaseOrder(id INT64, status STRING, PRIMARY KEY(id))",
-    )
-    .unwrap();
+    db.execute("CREATE NODE TABLE PurchaseOrder(id INT64, status STRING, PRIMARY KEY(id))")
+        .unwrap();
     db.execute(
         "CREATE NODE TABLE ServiceRequest(id INT64, order_id INT64, reason STRING, status STRING, PRIMARY KEY(id))",
     )
@@ -1321,10 +1213,8 @@ fn e10_after_sales_service_chain() {
         "CREATE (sr:ServiceRequest {id: 101, order_id: 1, reason: 'defective', status: 'open'})",
     )
     .unwrap();
-    db.execute(
-        "CREATE (rf:Refund {id: 201, sr_id: 101, amount: 500.0, status: 'pending'})",
-    )
-    .unwrap();
+    db.execute("CREATE (rf:Refund {id: 201, sr_id: 101, amount: 500.0, status: 'pending'})")
+        .unwrap();
     db.execute(
         "CREATE (t:Ticket {id: 301, refund_id: 201, assignee: 'Agent1', status: 'in_progress'})",
     )
@@ -1368,10 +1258,8 @@ fn e10_after_sales_service_chain() {
         "CREATE (sr:ServiceRequest {id: 102, order_id: 1, reason: 'wrong_item', status: 'open'})",
     )
     .unwrap();
-    db.execute(
-        "CREATE (rf:Refund {id: 202, sr_id: 102, amount: 200.0, status: 'approved'})",
-    )
-    .unwrap();
+    db.execute("CREATE (rf:Refund {id: 202, sr_id: 102, amount: 200.0, status: 'approved'})")
+        .unwrap();
     db.execute(
         "CREATE (t:Ticket {id: 302, refund_id: 202, assignee: 'Agent2', status: 'resolved'})",
     )
@@ -1438,16 +1326,13 @@ fn e10_after_sales_service_chain() {
 fn e11_product_variant_hierarchy() {
     let db = Database::in_memory();
 
-    db.execute(
-        "CREATE NODE TABLE Product(id INT64, name STRING, brand STRING, PRIMARY KEY(id))",
-    )
-    .unwrap();
+    db.execute("CREATE NODE TABLE Product(id INT64, name STRING, brand STRING, PRIMARY KEY(id))")
+        .unwrap();
     db.execute(
         "CREATE NODE TABLE Variant(id INT64, product_id INT64, color STRING, size STRING, stock INT64, price DOUBLE, PRIMARY KEY(id))",
     )
     .unwrap();
-    db.execute("CREATE NODE TABLE Customer(id INT64, name STRING, PRIMARY KEY(id))")
-        .unwrap();
+    db.execute("CREATE NODE TABLE Customer(id INT64, name STRING, PRIMARY KEY(id))").unwrap();
     db.execute("CREATE REL TABLE HAS_VARIANT(FROM Product TO Variant)").unwrap();
     db.execute("CREATE REL TABLE BOUGHT_VARIANT(FROM Customer TO Variant)").unwrap();
 
@@ -1527,8 +1412,7 @@ fn e11_product_variant_hierarchy() {
     // Parent product total sales through 2-hop aggregation
     // Add some customers who bought variants
     for i in 1..=5 {
-        db.execute(&format!("CREATE (c:Customer {{id: {}, name: 'Buyer{}'}})", i, i))
-            .unwrap();
+        db.execute(&format!("CREATE (c:Customer {{id: {}, name: 'Buyer{}'}})", i, i)).unwrap();
     }
     // 3 bought Red-M (101), 2 bought Red-L (102), 0 bought Blue-M (103)
     for cid in 1..=3 {
@@ -1556,11 +1440,7 @@ fn e11_product_variant_hierarchy() {
              RETURN count(c)",
         )
         .unwrap();
-    assert_eq!(
-        r.rows()[0].get_int(0).unwrap(),
-        5,
-        "parent product total sales = 5"
-    );
+    assert_eq!(r.rows()[0].get_int(0).unwrap(), 5, "parent product total sales = 5");
 
     // Sales per variant
     let r = db
@@ -1586,16 +1466,10 @@ fn e11_product_variant_hierarchy() {
 fn e12_supplier_warehouse_supply_chain() {
     let db = Database::in_memory();
 
-    db.execute(
-        "CREATE NODE TABLE Supplier(id INT64, name STRING, PRIMARY KEY(id))",
-    )
-    .unwrap();
-    db.execute(
-        "CREATE NODE TABLE Warehouse(id INT64, name STRING, city STRING, PRIMARY KEY(id))",
-    )
-    .unwrap();
-    db.execute("CREATE NODE TABLE Product(id INT64, name STRING, PRIMARY KEY(id))")
+    db.execute("CREATE NODE TABLE Supplier(id INT64, name STRING, PRIMARY KEY(id))").unwrap();
+    db.execute("CREATE NODE TABLE Warehouse(id INT64, name STRING, city STRING, PRIMARY KEY(id))")
         .unwrap();
+    db.execute("CREATE NODE TABLE Product(id INT64, name STRING, PRIMARY KEY(id))").unwrap();
 
     // Use intermediate nodes to model edge properties (lead_time, qty)
     db.execute(
@@ -1625,19 +1499,13 @@ fn e12_supplier_warehouse_supply_chain() {
     db.execute("CREATE (p:Product {id: 2, name: 'Phone'})").unwrap();
 
     // Supply links: SupplierA -> SH-01 (lead_time: 7), SupplierB -> BJ-01 (lead_time: 14)
-    db.execute(
-        "CREATE (sl:SupplyLink {id: 1, supplier_id: 1, warehouse_id: 1, lead_time: 7})",
-    )
-    .unwrap();
-    db.execute(
-        "CREATE (sl:SupplyLink {id: 2, supplier_id: 2, warehouse_id: 2, lead_time: 14})",
-    )
-    .unwrap();
+    db.execute("CREATE (sl:SupplyLink {id: 1, supplier_id: 1, warehouse_id: 1, lead_time: 7})")
+        .unwrap();
+    db.execute("CREATE (sl:SupplyLink {id: 2, supplier_id: 2, warehouse_id: 2, lead_time: 14})")
+        .unwrap();
     // SupplierA also supplies BJ-01 with lead_time: 10
-    db.execute(
-        "CREATE (sl:SupplyLink {id: 3, supplier_id: 1, warehouse_id: 2, lead_time: 10})",
-    )
-    .unwrap();
+    db.execute("CREATE (sl:SupplyLink {id: 3, supplier_id: 1, warehouse_id: 2, lead_time: 10})")
+        .unwrap();
 
     // Link supply chains
     db.execute(
@@ -1672,18 +1540,11 @@ fn e12_supplier_warehouse_supply_chain() {
     .unwrap();
 
     // Stock records: SH-01 has 100 Laptops, BJ-01 has 50 Laptops, BJ-01 has 200 Phones
-    db.execute(
-        "CREATE (sr:StockRecord {id: 1, warehouse_id: 1, product_id: 1, qty: 100})",
-    )
-    .unwrap();
-    db.execute(
-        "CREATE (sr:StockRecord {id: 2, warehouse_id: 2, product_id: 1, qty: 50})",
-    )
-    .unwrap();
-    db.execute(
-        "CREATE (sr:StockRecord {id: 3, warehouse_id: 2, product_id: 2, qty: 200})",
-    )
-    .unwrap();
+    db.execute("CREATE (sr:StockRecord {id: 1, warehouse_id: 1, product_id: 1, qty: 100})")
+        .unwrap();
+    db.execute("CREATE (sr:StockRecord {id: 2, warehouse_id: 2, product_id: 1, qty: 50})").unwrap();
+    db.execute("CREATE (sr:StockRecord {id: 3, warehouse_id: 2, product_id: 2, qty: 200})")
+        .unwrap();
 
     // Link stock records
     db.execute(
@@ -1740,11 +1601,7 @@ fn e12_supplier_warehouse_supply_chain() {
              RETURN sum(sr.qty)",
         )
         .unwrap();
-    assert_eq!(
-        r.rows()[0].get_int(0).unwrap(),
-        150,
-        "total Laptop stock should be 150"
-    );
+    assert_eq!(r.rows()[0].get_int(0).unwrap(), 150, "total Laptop stock should be 150");
 
     // Find fastest supply route for Laptop (by lead_time)
     let r = db
@@ -1783,8 +1640,7 @@ fn e12_supplier_warehouse_supply_chain() {
 fn e13_price_history_and_time_pricing() {
     let db = Database::in_memory();
 
-    db.execute("CREATE NODE TABLE Product(id INT64, name STRING, PRIMARY KEY(id))")
-        .unwrap();
+    db.execute("CREATE NODE TABLE Product(id INT64, name STRING, PRIMARY KEY(id))").unwrap();
     // PriceRecord as node (since edge properties are not queryable in RETURN)
     db.execute(
         "CREATE NODE TABLE PriceRecord(id INT64, product_id INT64, amount DOUBLE, \
@@ -1836,11 +1692,7 @@ fn e13_price_history_and_time_pricing() {
         .unwrap();
     assert_eq!(r.num_rows(), 1, "should find exactly one active price");
     let price = r.rows()[0].get_float(0).unwrap();
-    assert!(
-        (price - 4499.0).abs() < 0.01,
-        "price at 20241015 should be 4499.0, got {}",
-        price
-    );
+    assert!((price - 4499.0).abs() < 0.01, "price at 20241015 should be 4499.0, got {}", price);
 
     // Query effective price at 20240315 (should be 4999.0)
     let r = db
@@ -1852,11 +1704,7 @@ fn e13_price_history_and_time_pricing() {
         .unwrap();
     assert_eq!(r.num_rows(), 1);
     let price = r.rows()[0].get_float(0).unwrap();
-    assert!(
-        (price - 4999.0).abs() < 0.01,
-        "price at 20240315 should be 4999.0, got {}",
-        price
-    );
+    assert!((price - 4999.0).abs() < 0.01, "price at 20240315 should be 4999.0, got {}", price);
 
     // Query effective price at 20260101 (should be 3999.0, current)
     let r = db
@@ -1868,11 +1716,7 @@ fn e13_price_history_and_time_pricing() {
         .unwrap();
     assert_eq!(r.num_rows(), 1);
     let price = r.rows()[0].get_float(0).unwrap();
-    assert!(
-        (price - 3999.0).abs() < 0.01,
-        "price at 20260101 should be 3999.0, got {}",
-        price
-    );
+    assert!((price - 3999.0).abs() < 0.01, "price at 20260101 should be 3999.0, got {}", price);
 
     // Price change count = 3
     let r = db
@@ -1882,11 +1726,7 @@ fn e13_price_history_and_time_pricing() {
              RETURN count(pr)",
         )
         .unwrap();
-    assert_eq!(
-        r.rows()[0].get_int(0).unwrap(),
-        3,
-        "should have 3 price records"
-    );
+    assert_eq!(r.rows()[0].get_int(0).unwrap(), 3, "should have 3 price records");
 
     // Historical min price = 3999.0
     let r = db
@@ -1897,11 +1737,7 @@ fn e13_price_history_and_time_pricing() {
         )
         .unwrap();
     let min_price = r.rows()[0].get_float(0).unwrap();
-    assert!(
-        (min_price - 3999.0).abs() < 0.01,
-        "min price should be 3999.0, got {}",
-        min_price
-    );
+    assert!((min_price - 3999.0).abs() < 0.01, "min price should be 3999.0, got {}", min_price);
 
     // Historical max price = 4999.0
     let r = db
@@ -1912,11 +1748,7 @@ fn e13_price_history_and_time_pricing() {
         )
         .unwrap();
     let max_price = r.rows()[0].get_float(0).unwrap();
-    assert!(
-        (max_price - 4999.0).abs() < 0.01,
-        "max price should be 4999.0, got {}",
-        max_price
-    );
+    assert!((max_price - 4999.0).abs() < 0.01, "max price should be 4999.0, got {}", max_price);
 
     // Price history sorted by effective_from
     let r = db
@@ -1992,12 +1824,7 @@ fn e13_price_history_and_time_pricing() {
     let mut change_rows: Vec<(String, i64)> = r
         .rows()
         .iter()
-        .map(|row| {
-            (
-                row.get_string(0).unwrap().to_string(),
-                row.get_int(1).unwrap(),
-            )
-        })
+        .map(|row| (row.get_string(0).unwrap().to_string(), row.get_int(1).unwrap()))
         .collect();
     change_rows.sort_by(|a, b| b.1.cmp(&a.1));
     assert_eq!(change_rows.len(), 2);
