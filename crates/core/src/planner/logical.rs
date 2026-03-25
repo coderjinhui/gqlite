@@ -22,10 +22,7 @@ pub enum LogicalOperator {
     },
 
     /// Filter rows by a predicate expression.
-    Filter {
-        input: Box<LogicalOperator>,
-        predicate: Expr,
-    },
+    Filter { input: Box<LogicalOperator>, predicate: Expr },
 
     /// Project specific expressions from input.
     Projection {
@@ -108,24 +105,13 @@ pub enum LogicalOperator {
     },
 
     /// Update node/rel properties.
-    SetProperty {
-        input: Box<LogicalOperator>,
-        items: Vec<BoundSetItem>,
-    },
+    SetProperty { input: Box<LogicalOperator>, items: Vec<BoundSetItem> },
 
     /// Delete nodes/relationships.
-    Delete {
-        input: Box<LogicalOperator>,
-        detach: bool,
-        variables: Vec<String>,
-    },
+    Delete { input: Box<LogicalOperator>, detach: bool, variables: Vec<String> },
 
     /// DDL: Create a node table.
-    CreateNodeTable {
-        name: String,
-        columns: Vec<(String, DataType)>,
-        primary_key: String,
-    },
+    CreateNodeTable { name: String, columns: Vec<(String, DataType)>, primary_key: String },
 
     /// DDL: Create a relationship table.
     CreateRelTable {
@@ -142,45 +128,25 @@ pub enum LogicalOperator {
     ReturnAll { input: Box<LogicalOperator> },
 
     /// Sort rows by given expressions.
-    OrderBy {
-        input: Box<LogicalOperator>,
-        items: Vec<OrderByItem>,
-    },
+    OrderBy { input: Box<LogicalOperator>, items: Vec<OrderByItem> },
 
     /// Limit output to N rows.
-    Limit {
-        input: Box<LogicalOperator>,
-        count: Expr,
-    },
+    Limit { input: Box<LogicalOperator>, count: Expr },
 
     /// Skip the first N rows.
-    Skip {
-        input: Box<LogicalOperator>,
-        count: Expr,
-    },
+    Skip { input: Box<LogicalOperator>, count: Expr },
 
     /// Aggregate with implicit GROUP BY from non-aggregate expressions.
-    Aggregate {
-        input: Box<LogicalOperator>,
-        expressions: Vec<(Expr, Option<String>)>,
-    },
+    Aggregate { input: Box<LogicalOperator>, expressions: Vec<(Expr, Option<String>)> },
 
     /// Empty result (for standalone CREATE/INSERT).
     EmptyResult,
 
     /// Combine two query results (UNION / UNION ALL).
-    Union {
-        left: Box<LogicalOperator>,
-        right: Box<LogicalOperator>,
-        all: bool,
-    },
+    Union { left: Box<LogicalOperator>, right: Box<LogicalOperator>, all: bool },
 
     /// Expand a list expression into multiple rows.
-    Unwind {
-        input: Box<LogicalOperator>,
-        expr: Expr,
-        alias: String,
-    },
+    Unwind { input: Box<LogicalOperator>, expr: Expr, alias: String },
 
     /// Upsert: match or create a pattern.
     Merge {
@@ -192,32 +158,16 @@ pub enum LogicalOperator {
     },
 
     /// DDL: Alter a table.
-    AlterTable {
-        table_name: String,
-        action: AlterTableAction,
-    },
+    AlterTable { table_name: String, action: AlterTableAction },
 
     /// COPY FROM: import CSV into a table.
-    CopyFrom {
-        table_name: String,
-        file_path: String,
-        header: bool,
-        delimiter: char,
-    },
+    CopyFrom { table_name: String, file_path: String, header: bool, delimiter: char },
 
     /// COPY TO: export data to CSV.
-    CopyTo {
-        source: CopyToSource,
-        file_path: String,
-        header: bool,
-        delimiter: char,
-    },
+    CopyTo { source: CopyToSource, file_path: String, header: bool, delimiter: char },
 
     /// Execute a subquery and concatenate/cross-join results with input.
-    CallSubquery {
-        input: Box<LogicalOperator>,
-        subquery: QueryStatement,
-    },
+    CallSubquery { input: Box<LogicalOperator>, subquery: QueryStatement },
 }
 
 /// Source for COPY TO operation.
@@ -258,52 +208,37 @@ impl<'a> Planner<'a> {
     pub fn plan(&self, stmt: &BoundStatement) -> Result<LogicalOperator, GqliteError> {
         match stmt {
             BoundStatement::Query(q) => self.plan_query(q),
-            BoundStatement::CreateNodeTable {
-                name,
-                columns,
-                primary_key,
-            } => Ok(LogicalOperator::CreateNodeTable {
-                name: name.clone(),
-                columns: columns.clone(),
-                primary_key: primary_key.clone(),
-            }),
-            BoundStatement::CreateRelTable {
-                name,
-                from_table,
-                to_table,
-                columns,
-            } => Ok(LogicalOperator::CreateRelTable {
-                name: name.clone(),
-                from_table: from_table.clone(),
-                to_table: to_table.clone(),
-                columns: columns.clone(),
-            }),
+            BoundStatement::CreateNodeTable { name, columns, primary_key } => {
+                Ok(LogicalOperator::CreateNodeTable {
+                    name: name.clone(),
+                    columns: columns.clone(),
+                    primary_key: primary_key.clone(),
+                })
+            }
+            BoundStatement::CreateRelTable { name, from_table, to_table, columns } => {
+                Ok(LogicalOperator::CreateRelTable {
+                    name: name.clone(),
+                    from_table: from_table.clone(),
+                    to_table: to_table.clone(),
+                    columns: columns.clone(),
+                })
+            }
             BoundStatement::DropTable { name } => {
                 Ok(LogicalOperator::DropTable { name: name.clone() })
             }
-            BoundStatement::AlterTable { table_name, action } => {
-                Ok(LogicalOperator::AlterTable {
+            BoundStatement::AlterTable { table_name, action } => Ok(LogicalOperator::AlterTable {
+                table_name: table_name.clone(),
+                action: action.clone(),
+            }),
+            BoundStatement::CopyFrom { table_name, file_path, header, delimiter } => {
+                Ok(LogicalOperator::CopyFrom {
                     table_name: table_name.clone(),
-                    action: action.clone(),
+                    file_path: file_path.clone(),
+                    header: *header,
+                    delimiter: *delimiter,
                 })
             }
-            BoundStatement::CopyFrom {
-                table_name,
-                file_path,
-                header,
-                delimiter,
-            } => Ok(LogicalOperator::CopyFrom {
-                table_name: table_name.clone(),
-                file_path: file_path.clone(),
-                header: *header,
-                delimiter: *delimiter,
-            }),
-            BoundStatement::CopyTo {
-                source,
-                file_path,
-                header,
-                delimiter,
-            } => {
+            BoundStatement::CopyTo { source, file_path, header, delimiter } => {
                 let copy_source = match source {
                     crate::binder::BoundCopySource::Table(name) => {
                         CopyToSource::Table(name.clone())
@@ -346,8 +281,7 @@ impl<'a> Planner<'a> {
                         if let Some(existing) = current_plan.take() {
                             // OPTIONAL MATCH after a previous MATCH:
                             // Feed existing rows into the expand with optional=true.
-                            let expanded =
-                                self.plan_optional_match_expand(&m.pattern, existing)?;
+                            let expanded = self.plan_optional_match_expand(&m.pattern, existing)?;
                             current_plan = Some(expanded);
                         } else {
                             // OPTIONAL MATCH without prior MATCH — treat as regular match
@@ -376,11 +310,7 @@ impl<'a> Planner<'a> {
                                     plan
                                 }
                             }
-                            None => {
-                                return Err(GqliteError::Other(
-                                    "empty MATCH pattern".into(),
-                                ))
-                            }
+                            None => return Err(GqliteError::Other("empty MATCH pattern".into())),
                         });
                     }
                 }
@@ -391,10 +321,8 @@ impl<'a> Planner<'a> {
                     // Apply pending filter first
                     if let Some(predicate) = pending_filter.take() {
                         if let Some(input) = current_plan.take() {
-                            current_plan = Some(LogicalOperator::Filter {
-                                input: Box::new(input),
-                                predicate,
-                            });
+                            current_plan =
+                                Some(LogicalOperator::Filter { input: Box::new(input), predicate });
                         }
                     }
 
@@ -422,9 +350,8 @@ impl<'a> Planner<'a> {
                     // Build projection or aggregate
                     if ret.return_all {
                         if let Some(input) = current_plan.take() {
-                            current_plan = Some(LogicalOperator::ReturnAll {
-                                input: Box::new(input),
-                            });
+                            current_plan =
+                                Some(LogicalOperator::ReturnAll { input: Box::new(input) });
                         }
                     } else {
                         let expressions: Vec<(Expr, Option<String>)> = ret
@@ -432,10 +359,7 @@ impl<'a> Planner<'a> {
                             .iter()
                             .map(|item| (item.expr.clone(), item.alias.clone()))
                             .collect();
-                        let has_agg = ret
-                            .items
-                            .iter()
-                            .any(|item| contains_aggregate(&item.expr));
+                        let has_agg = ret.items.iter().any(|item| contains_aggregate(&item.expr));
                         if let Some(input) = current_plan.take() {
                             if has_agg {
                                 current_plan = Some(LogicalOperator::Aggregate {
@@ -481,20 +405,14 @@ impl<'a> Planner<'a> {
                     // Apply pending filter first
                     if let Some(predicate) = pending_filter.take() {
                         if let Some(input) = current_plan.take() {
-                            current_plan = Some(LogicalOperator::Filter {
-                                input: Box::new(input),
-                                predicate,
-                            });
+                            current_plan =
+                                Some(LogicalOperator::Filter { input: Box::new(input), predicate });
                         }
                     }
                     // WITH acts like RETURN but feeds into next clause
-                    let expressions: Vec<(Expr, Option<String>)> = items
-                        .iter()
-                        .map(|item| (item.expr.clone(), item.alias.clone()))
-                        .collect();
-                    let has_agg = items
-                        .iter()
-                        .any(|item| contains_aggregate(&item.expr));
+                    let expressions: Vec<(Expr, Option<String>)> =
+                        items.iter().map(|item| (item.expr.clone(), item.alias.clone())).collect();
+                    let has_agg = items.iter().any(|item| contains_aggregate(&item.expr));
                     if let Some(input) = current_plan.take() {
                         if has_agg {
                             current_plan = Some(LogicalOperator::Aggregate {
@@ -515,19 +433,13 @@ impl<'a> Planner<'a> {
                         // access pre-projection columns (e.g. ORDER BY n.age
                         // when only RETURN n.name).
                         match plan {
-                            LogicalOperator::Projection {
-                                input,
-                                expressions,
-                            } => {
-                                let sorted = LogicalOperator::OrderBy {
-                                    input,
-                                    items: items.clone(),
-                                };
-                                current_plan =
-                                    Some(LogicalOperator::Projection {
-                                        input: Box::new(sorted),
-                                        expressions,
-                                    });
+                            LogicalOperator::Projection { input, expressions } => {
+                                let sorted =
+                                    LogicalOperator::OrderBy { input, items: items.clone() };
+                                current_plan = Some(LogicalOperator::Projection {
+                                    input: Box::new(sorted),
+                                    expressions,
+                                });
                             }
                             other => {
                                 current_plan = Some(LogicalOperator::OrderBy {
@@ -555,9 +467,7 @@ impl<'a> Planner<'a> {
                     }
                 }
                 BoundClause::Unwind { expr, alias } => {
-                    let input = current_plan
-                        .take()
-                        .unwrap_or(LogicalOperator::EmptyResult);
+                    let input = current_plan.take().unwrap_or(LogicalOperator::EmptyResult);
                     current_plan = Some(LogicalOperator::Unwind {
                         input: Box::new(input),
                         expr: expr.clone(),
@@ -571,10 +481,7 @@ impl<'a> Planner<'a> {
                             if let Some(ref label) = n.label {
                                 let entry =
                                     self.catalog.get_node_table(label).ok_or_else(|| {
-                                        GqliteError::Other(format!(
-                                            "table '{}' not found",
-                                            label
-                                        ))
+                                        GqliteError::Other(format!("table '{}' not found", label))
                                     })?;
                                 let properties: Vec<(usize, Expr)> = n
                                     .properties
@@ -624,15 +531,11 @@ impl<'a> Planner<'a> {
                     // Apply pending filter before subquery
                     if let Some(predicate) = pending_filter.take() {
                         if let Some(input) = current_plan.take() {
-                            current_plan = Some(LogicalOperator::Filter {
-                                input: Box::new(input),
-                                predicate,
-                            });
+                            current_plan =
+                                Some(LogicalOperator::Filter { input: Box::new(input), predicate });
                         }
                     }
-                    let input = current_plan
-                        .take()
-                        .unwrap_or(LogicalOperator::EmptyResult);
+                    let input = current_plan.take().unwrap_or(LogicalOperator::EmptyResult);
                     current_plan = Some(LogicalOperator::CallSubquery {
                         input: Box::new(input),
                         subquery: sub.clone(),
@@ -646,10 +549,8 @@ impl<'a> Planner<'a> {
             // Apply pending filter before CREATE
             if let Some(predicate) = pending_filter.take() {
                 if let Some(input) = current_plan.take() {
-                    current_plan = Some(LogicalOperator::Filter {
-                        input: Box::new(input),
-                        predicate,
-                    });
+                    current_plan =
+                        Some(LogicalOperator::Filter { input: Box::new(input), predicate });
                 }
             }
             let create_plan = self.plan_create(current_plan, pattern)?;
@@ -659,10 +560,7 @@ impl<'a> Planner<'a> {
         // Apply any remaining filter BEFORE SET/DELETE
         if let Some(predicate) = pending_filter {
             if let Some(input) = current_plan.take() {
-                current_plan = Some(LogicalOperator::Filter {
-                    input: Box::new(input),
-                    predicate,
-                });
+                current_plan = Some(LogicalOperator::Filter { input: Box::new(input), predicate });
             }
         }
 
@@ -704,14 +602,8 @@ impl<'a> Planner<'a> {
                     LogicalOperator::HashJoin {
                         build: Box::new(existing),
                         probe: Box::new(plan),
-                        build_key: JoinKey {
-                            alias: String::new(),
-                            column: String::new(),
-                        },
-                        probe_key: JoinKey {
-                            alias: String::new(),
-                            column: String::new(),
-                        },
+                        build_key: JoinKey { alias: String::new(), column: String::new() },
+                        probe_key: JoinKey { alias: String::new(), column: String::new() },
                     }
                 } else {
                     plan
@@ -758,22 +650,16 @@ impl<'a> Planner<'a> {
                         let src_alias = last_alias.clone();
                         let dst_alias = self.next_node_alias_from_path(path, r)?;
 
-                        let (rel_table_name, rel_table_id) =
-                            if let Some(ref label) = r.label {
-                                let entry =
-                                    self.catalog.get_rel_table(label).ok_or_else(|| {
-                                        GqliteError::Other(format!(
-                                            "rel table '{}' not found",
-                                            label
-                                        ))
-                                    })?;
-                                (label.clone(), entry.table_id)
-                            } else {
-                                (String::new(), 0)
-                            };
+                        let (rel_table_name, rel_table_id) = if let Some(ref label) = r.label {
+                            let entry = self.catalog.get_rel_table(label).ok_or_else(|| {
+                                GqliteError::Other(format!("rel table '{}' not found", label))
+                            })?;
+                            (label.clone(), entry.table_id)
+                        } else {
+                            (String::new(), 0)
+                        };
 
-                        let (dst_table_name, dst_table_id) =
-                            self.resolve_dst_table(path, r);
+                        let (dst_table_name, dst_table_id) = self.resolve_dst_table(path, r);
 
                         current = LogicalOperator::Expand {
                             input: Box::new(current),
@@ -911,13 +797,9 @@ impl<'a> Planner<'a> {
                 for elem in &path.elements {
                     if let PatternElement::Node(n) = elem {
                         if let Some(ref label) = n.label {
-                            let entry =
-                                self.catalog.get_node_table(label).ok_or_else(|| {
-                                    GqliteError::Other(format!(
-                                        "table '{}' not found",
-                                        label
-                                    ))
-                                })?;
+                            let entry = self.catalog.get_node_table(label).ok_or_else(|| {
+                                GqliteError::Other(format!("table '{}' not found", label))
+                            })?;
                             let values: Vec<(usize, Expr)> = n
                                 .properties
                                 .iter()
@@ -943,17 +825,12 @@ impl<'a> Planner<'a> {
                 for elem in &path.elements {
                     if let PatternElement::Rel(r) = elem {
                         if let Some(ref label) = r.label {
-                            let entry =
-                                self.catalog.get_rel_table(label).ok_or_else(|| {
-                                    GqliteError::Other(format!(
-                                        "rel table '{}' not found",
-                                        label
-                                    ))
-                                })?;
+                            let entry = self.catalog.get_rel_table(label).ok_or_else(|| {
+                                GqliteError::Other(format!("rel table '{}' not found", label))
+                            })?;
 
                             // Find src and dst aliases from surrounding nodes
-                            let (src_alias, dst_alias) =
-                                self.extract_rel_endpoints(path, r);
+                            let (src_alias, dst_alias) = self.extract_rel_endpoints(path, r);
 
                             // Resolve rel properties: map property names to column indices
                             let properties: Vec<(usize, Expr)> = r
@@ -1073,26 +950,14 @@ impl<'a> Planner<'a> {
             .pattern
             .elements
             .first()
-            .and_then(|e| {
-                if let PatternElement::Node(n) = e {
-                    n.alias.clone()
-                } else {
-                    None
-                }
-            })
+            .and_then(|e| if let PatternElement::Node(n) = e { n.alias.clone() } else { None })
             .unwrap_or_default();
 
         let dst_alias = sp
             .pattern
             .elements
             .last()
-            .and_then(|e| {
-                if let PatternElement::Node(n) = e {
-                    n.alias.clone()
-                } else {
-                    None
-                }
-            })
+            .and_then(|e| if let PatternElement::Node(n) = e { n.alias.clone() } else { None })
             .unwrap_or_default();
 
         // Extract rel info from the pattern (the first Rel element)
@@ -1105,42 +970,32 @@ impl<'a> Planner<'a> {
         });
 
         let rel = rel.ok_or_else(|| {
-            GqliteError::Other(
-                "shortestPath requires a relationship pattern".into(),
-            )
+            GqliteError::Other("shortestPath requires a relationship pattern".into())
         })?;
 
         let (rel_table_name, rel_table_id) = if let Some(ref label) = rel.label {
-            let entry = self.catalog.get_rel_table(label).ok_or_else(|| {
-                GqliteError::Other(format!("rel table '{}' not found", label))
-            })?;
+            let entry = self
+                .catalog
+                .get_rel_table(label)
+                .ok_or_else(|| GqliteError::Other(format!("rel table '{}' not found", label)))?;
             (label.clone(), entry.table_id)
         } else {
-            return Err(GqliteError::Other(
-                "shortestPath requires a typed relationship".into(),
-            ));
+            return Err(GqliteError::Other("shortestPath requires a typed relationship".into()));
         };
 
         // Resolve destination table id from the last node's label
-        let dst_table_id = sp
-            .pattern
-            .elements
-            .last()
-            .and_then(|e| {
-                if let PatternElement::Node(n) = e {
-                    n.label
-                        .as_ref()
-                        .and_then(|l| self.catalog.get_node_table(l))
-                        .map(|entry| entry.table_id)
-                } else {
-                    None
-                }
-            });
+        let dst_table_id = sp.pattern.elements.last().and_then(|e| {
+            if let PatternElement::Node(n) = e {
+                n.label
+                    .as_ref()
+                    .and_then(|l| self.catalog.get_node_table(l))
+                    .map(|entry| entry.table_id)
+            } else {
+                None
+            }
+        });
 
-        let max_hops = rel
-            .var_length
-            .map(|(_, max)| max)
-            .unwrap_or(u32::MAX);
+        let max_hops = rel.var_length.map(|(_, max)| max).unwrap_or(u32::MAX);
 
         Ok(LogicalOperator::ShortestPath {
             input: Box::new(input),
@@ -1170,9 +1025,7 @@ fn contains_aggregate(expr: &Expr) -> bool {
             args.iter().any(contains_aggregate)
         }
         Expr::Property(base, _) => contains_aggregate(base),
-        Expr::BinaryOp { left, right, .. } => {
-            contains_aggregate(left) || contains_aggregate(right)
-        }
+        Expr::BinaryOp { left, right, .. } => contains_aggregate(left) || contains_aggregate(right),
         Expr::UnaryOp { expr, .. } => contains_aggregate(expr),
         Expr::IsNull { expr, .. } => contains_aggregate(expr),
         Expr::Cast { expr, .. } => contains_aggregate(expr),
@@ -1194,9 +1047,7 @@ fn contains_aggregate(expr: &Expr) -> bool {
             }
             false
         }
-        Expr::In { expr, list, .. } => {
-            contains_aggregate(expr) || contains_aggregate(list)
-        }
+        Expr::In { expr, list, .. } => contains_aggregate(expr) || contains_aggregate(list),
         Expr::Exists(_) => false,
         Expr::ListComprehension { list, filter, map_expr, .. } => {
             if contains_aggregate(list) {
@@ -1217,4 +1068,3 @@ fn contains_aggregate(expr: &Expr) -> bool {
         _ => false,
     }
 }
-

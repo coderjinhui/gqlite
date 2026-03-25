@@ -32,11 +32,7 @@ pub(crate) struct Intermediate {
 
 impl Intermediate {
     pub(crate) fn empty() -> Self {
-        Self {
-            columns: Vec::new(),
-            types: Vec::new(),
-            rows: Vec::new(),
-        }
+        Self { columns: Vec::new(), types: Vec::new(), rows: Vec::new() }
     }
 
     pub(crate) fn into_query_result(self) -> QueryResult {
@@ -44,16 +40,9 @@ impl Intermediate {
             .columns
             .iter()
             .zip(self.types.iter())
-            .map(|(name, dt)| ColumnInfo {
-                name: name.clone(),
-                data_type: dt.clone(),
-            })
+            .map(|(name, dt)| ColumnInfo { name: name.clone(), data_type: dt.clone() })
             .collect();
-        let rows: Vec<Row> = self
-            .rows
-            .into_iter()
-            .map(|values| Row { values })
-            .collect();
+        let rows: Vec<Row> = self.rows.into_iter().map(|values| Row { values }).collect();
         QueryResult::new(columns, rows)
     }
 }
@@ -62,15 +51,15 @@ impl Intermediate {
 
 /// The execution engine interprets a physical plan and produces result rows.
 pub struct Engine {
-    params: HashMap<String, Value>,
+    pub(crate) params: HashMap<String, Value>,
     /// MVCC snapshot timestamp for visibility checks.
-    /// Rows with `create_ts <= start_ts` and `delete_ts == 0 || delete_ts > start_ts` are visible.
-    start_ts: u64,
+    pub(crate) start_ts: u64,
     /// Database reference for correlated subqueries (EXISTS).
-    db: Option<Arc<DatabaseInner>>,
+    pub(crate) db: Option<Arc<DatabaseInner>>,
     /// Outer scope bindings for correlated subqueries (EXISTS).
-    /// Each entry: (column_names, row_values) representing the outer row.
     outer_scope: Option<(Vec<String>, Vec<Value>)>,
+    /// Buffered WAL records for the current transaction.
+    pub(crate) wal_buffer: Vec<WalRecord>,
 }
 
 impl Engine {
@@ -80,21 +69,17 @@ impl Engine {
             start_ts: u64::MAX, // legacy: see everything
             db: None,
             outer_scope: None,
+            wal_buffer: Vec::new(),
         }
     }
 
     pub fn with_params(params: HashMap<String, Value>) -> Self {
-        Self {
-            params,
-            start_ts: u64::MAX,
-            db: None,
-            outer_scope: None,
-        }
+        Self { params, start_ts: u64::MAX, db: None, outer_scope: None, wal_buffer: Vec::new() }
     }
 
     /// Create an engine with MVCC snapshot and optional parameters.
     pub fn with_snapshot(start_ts: u64, params: HashMap<String, Value>) -> Self {
-        Self { params, start_ts, db: None, outer_scope: None }
+        Self { params, start_ts, db: None, outer_scope: None, wal_buffer: Vec::new() }
     }
 
     /// Set the database reference for correlated subquery evaluation (EXISTS).
@@ -104,39 +89,28 @@ impl Engine {
 
     /// Execute a physical plan against the database, returning a QueryResult.
     pub fn execute_plan(
-        &self,
+        &mut self,
         plan: &PhysicalPlan,
         db: &Arc<DatabaseInner>,
         txn_id: u64,
     ) -> Result<QueryResult, GqliteError> {
         match plan {
-            PhysicalPlan::CreateNodeTable {
-                name,
-                columns,
-                primary_key,
-            } => self.exec_create_node_table(db, name, columns, primary_key, txn_id),
-            PhysicalPlan::CreateRelTable {
-                name,
-                from_table,
-                to_table,
-                columns,
-            } => self.exec_create_rel_table(db, name, from_table, to_table, columns, txn_id),
+            PhysicalPlan::CreateNodeTable { name, columns, primary_key } => {
+                self.exec_create_node_table(db, name, columns, primary_key, txn_id)
+            }
+            PhysicalPlan::CreateRelTable { name, from_table, to_table, columns } => {
+                self.exec_create_rel_table(db, name, from_table, to_table, columns, txn_id)
+            }
             PhysicalPlan::DropTable { name } => self.exec_drop_table(db, name, txn_id),
             PhysicalPlan::AlterTable { table_name, action } => {
                 self.exec_alter_table(db, table_name, action, txn_id)
             }
-            PhysicalPlan::CopyFrom {
-                table_name,
-                file_path,
-                header,
-                delimiter,
-            } => self.exec_copy_from(db, table_name, file_path, *header, *delimiter, txn_id),
-            PhysicalPlan::CopyTo {
-                source,
-                file_path,
-                header,
-                delimiter,
-            } => self.exec_copy_to(db, source, file_path, *header, *delimiter, txn_id),
+            PhysicalPlan::CopyFrom { table_name, file_path, header, delimiter } => {
+                self.exec_copy_from(db, table_name, file_path, *header, *delimiter, txn_id)
+            }
+            PhysicalPlan::CopyTo { source, file_path, header, delimiter } => {
+                self.exec_copy_to(db, source, file_path, *header, *delimiter, txn_id)
+            }
             PhysicalPlan::EmptyResult => Ok(QueryResult::empty()),
             _ => {
                 let intermediate = self.execute_operator(plan, db, txn_id)?;
@@ -148,7 +122,7 @@ impl Engine {
     // ── DDL execution ───────────────────────────────────────────
 
     fn exec_create_node_table(
-        &self,
+        &mut self,
         db: &Arc<DatabaseInner>,
         name: &str,
         columns: &[(String, DataType)],
@@ -156,11 +130,14 @@ impl Engine {
         txn_id: u64,
     ) -> Result<QueryResult, GqliteError> {
         // WAL record
-        Self::wal_append(db, txn_id, WalPayload::CreateNodeTable {
-            name: name.to_string(),
-            columns: columns.to_vec(),
-            primary_key: primary_key.to_string(),
-        })?;
+        self.wal_buffer_append(
+            txn_id,
+            WalPayload::CreateNodeTable {
+                name: name.to_string(),
+                columns: columns.to_vec(),
+                primary_key: primary_key.to_string(),
+            },
+        )?;
 
         let mut catalog = db.catalog.write().unwrap();
         let col_defs: Vec<ColumnDef> = columns
@@ -177,14 +154,12 @@ impl Engine {
 
         let entry = catalog.get_node_table(name).unwrap().clone();
         let mut storage = db.storage.write().unwrap();
-        storage
-            .node_tables
-            .insert(table_id, NodeTable::new(&entry));
+        storage.node_tables.insert(table_id, NodeTable::new(&entry));
         Ok(QueryResult::empty())
     }
 
     fn exec_create_rel_table(
-        &self,
+        &mut self,
         db: &Arc<DatabaseInner>,
         name: &str,
         from_table: &str,
@@ -192,12 +167,15 @@ impl Engine {
         columns: &[(String, DataType)],
         txn_id: u64,
     ) -> Result<QueryResult, GqliteError> {
-        Self::wal_append(db, txn_id, WalPayload::CreateRelTable {
-            name: name.to_string(),
-            from_table: from_table.to_string(),
-            to_table: to_table.to_string(),
-            columns: columns.to_vec(),
-        })?;
+        self.wal_buffer_append(
+            txn_id,
+            WalPayload::CreateRelTable {
+                name: name.to_string(),
+                from_table: from_table.to_string(),
+                to_table: to_table.to_string(),
+                columns: columns.to_vec(),
+            },
+        )?;
 
         let mut catalog = db.catalog.write().unwrap();
         let col_defs: Vec<ColumnDef> = columns
@@ -219,14 +197,12 @@ impl Engine {
     }
 
     fn exec_drop_table(
-        &self,
+        &mut self,
         db: &Arc<DatabaseInner>,
         name: &str,
         txn_id: u64,
     ) -> Result<QueryResult, GqliteError> {
-        Self::wal_append(db, txn_id, WalPayload::DropTable {
-            name: name.to_string(),
-        })?;
+        self.wal_buffer_append(txn_id, WalPayload::DropTable { name: name.to_string() })?;
 
         let mut catalog = db.catalog.write().unwrap();
         let table_id = catalog
@@ -245,7 +221,7 @@ impl Engine {
     }
 
     fn exec_alter_table(
-        &self,
+        &mut self,
         db: &Arc<DatabaseInner>,
         table_name: &str,
         action: &AlterTableAction,
@@ -253,8 +229,7 @@ impl Engine {
     ) -> Result<QueryResult, GqliteError> {
         match action {
             AlterTableAction::AddColumn { col } => {
-                Self::wal_append(
-                    db,
+                self.wal_buffer_append(
                     txn_id,
                     WalPayload::AlterTableAddColumn {
                         table_name: table_name.to_string(),
@@ -295,8 +270,7 @@ impl Engine {
                 }
             }
             AlterTableAction::DropColumn { col_name } => {
-                Self::wal_append(
-                    db,
+                self.wal_buffer_append(
                     txn_id,
                     WalPayload::AlterTableDropColumn {
                         table_name: table_name.to_string(),
@@ -327,8 +301,7 @@ impl Engine {
                 }
             }
             AlterTableAction::RenameTable { new_name } => {
-                Self::wal_append(
-                    db,
+                self.wal_buffer_append(
                     txn_id,
                     WalPayload::AlterTableRenameTable {
                         old_name: table_name.to_string(),
@@ -339,8 +312,7 @@ impl Engine {
                 catalog.rename_table(table_name, new_name)?;
             }
             AlterTableAction::RenameColumn { old_name, new_name } => {
-                Self::wal_append(
-                    db,
+                self.wal_buffer_append(
                     txn_id,
                     WalPayload::AlterTableRenameColumn {
                         table_name: table_name.to_string(),
@@ -363,7 +335,7 @@ impl Engine {
     // ── COPY FROM CSV ────────────────────────────────────────────
 
     fn exec_copy_from(
-        &self,
+        &mut self,
         db: &Arc<DatabaseInner>,
         table_name: &str,
         file_path: &str,
@@ -389,8 +361,8 @@ impl Engine {
 
         let mut row_count = 0u64;
         for (line_idx, line_result) in reader.lines().enumerate() {
-            let line = line_result
-                .map_err(|e| GqliteError::Other(format!("CSV read error: {}", e)))?;
+            let line =
+                line_result.map_err(|e| GqliteError::Other(format!("CSV read error: {}", e)))?;
             let line = line.trim();
             if line.is_empty() {
                 continue;
@@ -414,8 +386,7 @@ impl Engine {
             }
 
             // Write WAL record
-            Self::wal_append(
-                db,
+            self.wal_buffer_append(
                 txn_id,
                 WalPayload::InsertNode {
                     table_name: table_name.to_string(),
@@ -447,7 +418,7 @@ impl Engine {
     // ── COPY TO CSV ──────────────────────────────────────────────
 
     fn exec_copy_to(
-        &self,
+        &mut self,
         db: &Arc<DatabaseInner>,
         source: &crate::planner::logical::CopyToSource,
         file_path: &str,
@@ -463,13 +434,9 @@ impl Engine {
             CopyToSource::Table(table_name) => {
                 let catalog = db.catalog.read().unwrap();
                 let entry = catalog.get_node_table(table_name).ok_or_else(|| {
-                    GqliteError::Other(format!(
-                        "table '{}' not found for COPY TO",
-                        table_name
-                    ))
+                    GqliteError::Other(format!("table '{}' not found for COPY TO", table_name))
                 })?;
-                let col_names: Vec<String> =
-                    entry.columns.iter().map(|c| c.name.clone()).collect();
+                let col_names: Vec<String> = entry.columns.iter().map(|c| c.name.clone()).collect();
                 let tid = entry.table_id;
                 drop(catalog);
 
@@ -477,8 +444,7 @@ impl Engine {
                 let node_table = storage.node_tables.get(&tid).ok_or_else(|| {
                     GqliteError::Other(format!("storage for table '{}' not found", table_name))
                 })?;
-                let all_rows: Vec<Vec<Value>> =
-                    node_table.scan().map(|(_, row)| row).collect();
+                let all_rows: Vec<Vec<Value>> = node_table.scan().map(|(_, row)| row).collect();
                 (col_names, all_rows)
             }
             CopyToSource::Query(query_plan) => {
@@ -498,7 +464,7 @@ impl Engine {
         }
 
         for row in &rows {
-            let fields: Vec<String> = row.iter().map(|v| value_to_csv_string(v)).collect();
+            let fields: Vec<String> = row.iter().map(value_to_csv_string).collect();
             let line = fields.join(&delimiter.to_string());
             writeln!(file, "{}", line)
                 .map_err(|e| GqliteError::Other(format!("CSV write error: {}", e)))?;
@@ -510,28 +476,22 @@ impl Engine {
     // ── Recursive operator execution ────────────────────────────
 
     pub(crate) fn execute_operator(
-        &self,
+        &mut self,
         plan: &PhysicalPlan,
         db: &Arc<DatabaseInner>,
         txn_id: u64,
     ) -> Result<Intermediate, GqliteError> {
         match plan {
-            PhysicalPlan::SeqScan {
-                table_name,
-                table_id,
-                columns: _,
-                alias,
-            } => self.exec_seq_scan(db, table_name, *table_id, alias, txn_id),
+            PhysicalPlan::SeqScan { table_name, table_id, columns: _, alias } => {
+                self.exec_seq_scan(db, table_name, *table_id, alias, txn_id)
+            }
 
             PhysicalPlan::Filter { input, predicate } => {
                 let input_result = self.execute_operator(input, db, txn_id)?;
                 self.exec_filter(input_result, predicate)
             }
 
-            PhysicalPlan::Projection {
-                input,
-                expressions,
-            } => {
+            PhysicalPlan::Projection { input, expressions } => {
                 let input_result = self.execute_operator(input, db, txn_id)?;
                 self.exec_projection(input_result, expressions)
             }
@@ -625,11 +585,9 @@ impl Engine {
                 self.exec_cross_join(build_result, probe_result)
             }
 
-            PhysicalPlan::InsertNode {
-                table_name,
-                table_id,
-                values,
-            } => self.exec_insert_node(db, table_name, *table_id, values, txn_id),
+            PhysicalPlan::InsertNode { table_name, table_id, values } => {
+                self.exec_insert_node(db, table_name, *table_id, values, txn_id)
+            }
 
             PhysicalPlan::InsertRel {
                 input,
@@ -657,11 +615,7 @@ impl Engine {
                 self.exec_set_property(db, input_result, items, txn_id)
             }
 
-            PhysicalPlan::Delete {
-                input,
-                detach: _,
-                variables,
-            } => {
+            PhysicalPlan::Delete { input, detach: _, variables } => {
                 let input_result = self.execute_operator(input, db, txn_id)?;
                 self.exec_delete(db, input_result, variables, txn_id)
             }
@@ -681,10 +635,7 @@ impl Engine {
                 self.exec_skip(input_result, count)
             }
 
-            PhysicalPlan::Aggregate {
-                input,
-                expressions,
-            } => {
+            PhysicalPlan::Aggregate { input, expressions } => {
                 let input_result = self.execute_operator(input, db, txn_id)?;
                 self.exec_aggregate(input_result, expressions)
             }
@@ -695,22 +646,14 @@ impl Engine {
                 self.exec_union(left_result, right_result, *all)
             }
 
-            PhysicalPlan::Unwind {
-                input,
-                expr,
-                alias,
-            } => {
+            PhysicalPlan::Unwind { input, expr, alias } => {
                 let input_result = self.execute_operator(input, db, txn_id)?;
                 self.exec_unwind(input_result, expr, alias)
             }
 
-            PhysicalPlan::Merge {
-                table_name,
-                table_id,
-                properties,
-                on_create,
-                on_match,
-            } => self.exec_merge(db, table_name, *table_id, properties, on_create, on_match, txn_id),
+            PhysicalPlan::Merge { table_name, table_id, properties, on_create, on_match } => {
+                self.exec_merge(db, table_name, *table_id, properties, on_create, on_match, txn_id)
+            }
 
             PhysicalPlan::CallSubquery { input, subquery } => {
                 self.exec_call_subquery(input, subquery, db, txn_id)
@@ -730,7 +673,7 @@ impl Engine {
     // ── SeqScan (Task 024) ──────────────────────────────────────
 
     fn exec_seq_scan(
-        &self,
+        &mut self,
         db: &Arc<DatabaseInner>,
         table_name: &str,
         table_id: u32,
@@ -742,7 +685,9 @@ impl Engine {
             // For EXISTS subqueries: check if this alias is bound in the outer scope.
             // If so, inject the outer row's data for this variable instead of returning empty.
             if let Some((ref outer_cols, ref outer_row)) = self.outer_scope {
-                return self.inject_outer_scope_scan(db, alias, outer_cols, outer_row);
+                let cols = outer_cols.clone();
+                let row = outer_row.clone();
+                return self.inject_outer_scope_scan(db, alias, &cols, &row);
             }
             return Ok(Intermediate::empty());
         }
@@ -751,9 +696,7 @@ impl Engine {
         let entry = catalog
             .get_node_table_by_id(table_id)
             .or_else(|| catalog.get_node_table(table_name))
-            .ok_or_else(|| {
-                GqliteError::Execution(format!("table '{}' not found", table_name))
-            })?;
+            .ok_or_else(|| GqliteError::Execution(format!("table '{}' not found", table_name)))?;
         let schema = entry.columns.clone();
         drop(catalog);
 
@@ -778,11 +721,7 @@ impl Engine {
             rows.push(row);
         }
 
-        Ok(Intermediate {
-            columns: col_names,
-            types: col_types,
-            rows,
-        })
+        Ok(Intermediate { columns: col_names, types: col_types, rows })
     }
 
     /// For EXISTS subqueries: inject outer scope data for an unlabeled node scan.
@@ -791,7 +730,7 @@ impl Engine {
     /// we look up the outer row's data for that variable (InternalId + properties)
     /// and return it as a single-row Intermediate, as if the scan found exactly that node.
     fn inject_outer_scope_scan(
-        &self,
+        &mut self,
         db: &Arc<DatabaseInner>,
         alias: &str,
         outer_cols: &[String],
@@ -868,17 +807,13 @@ impl Engine {
             }
         }
 
-        Ok(Intermediate {
-            columns: col_names,
-            types: col_types,
-            rows: vec![row_values],
-        })
+        Ok(Intermediate { columns: col_names, types: col_types, rows: vec![row_values] })
     }
 
     // ── Filter (Task 025) ───────────────────────────────────────
 
     pub(crate) fn exec_filter(
-        &self,
+        &mut self,
         input: Intermediate,
         predicate: &Expr,
     ) -> Result<Intermediate, GqliteError> {
@@ -889,17 +824,13 @@ impl Engine {
                 filtered.push(row.clone());
             }
         }
-        Ok(Intermediate {
-            columns: input.columns,
-            types: input.types,
-            rows: filtered,
-        })
+        Ok(Intermediate { columns: input.columns, types: input.types, rows: filtered })
     }
 
     // ── Projection (Task 025) ───────────────────────────────────
 
     pub(crate) fn exec_projection(
-        &self,
+        &mut self,
         input: Intermediate,
         expressions: &[(Expr, Option<String>)],
     ) -> Result<Intermediate, GqliteError> {
@@ -930,17 +861,14 @@ impl Engine {
             }
         }
 
-        Ok(Intermediate {
-            columns: col_names,
-            types: col_types,
-            rows,
-        })
+        Ok(Intermediate { columns: col_names, types: col_types, rows })
     }
 
     // ── CsrExpand ───────────────────────────────────────────────
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn exec_expand(
-        &self,
+        &mut self,
         db: &Arc<DatabaseInner>,
         input: Intermediate,
         rel_table_name: &str,
@@ -978,13 +906,9 @@ impl Engine {
             }
         }
 
-        let src_col = input
-            .columns
-            .iter()
-            .position(|c| c == src_alias)
-            .ok_or_else(|| {
-                GqliteError::Execution(format!("source alias '{}' not found", src_alias))
-            })?;
+        let src_col = input.columns.iter().position(|c| c == src_alias).ok_or_else(|| {
+            GqliteError::Execution(format!("source alias '{}' not found", src_alias))
+        })?;
 
         let pk_idx = dst_entry.as_ref().map(|e| e.primary_key_idx).unwrap_or(0);
         let mut out_rows = Vec::new();
@@ -1018,7 +942,7 @@ impl Engine {
                     if let Some(dst_table) = storage.node_tables.get(&tid) {
                         if let Ok(dst_vals) = dst_table.read(*neighbor_offset) {
                             // Skip deleted nodes
-                            if dst_vals.get(pk_idx).map_or(true, |v| v.is_null()) {
+                            if dst_vals.get(pk_idx).is_none_or(|v| v.is_null()) {
                                 continue;
                             }
                             new_row.extend(dst_vals);
@@ -1043,17 +967,14 @@ impl Engine {
             }
         }
 
-        Ok(Intermediate {
-            columns: out_cols,
-            types: out_types,
-            rows: out_rows,
-        })
+        Ok(Intermediate { columns: out_cols, types: out_types, rows: out_rows })
     }
 
     // ── RecursiveExpand (BFS variable-length paths) ─────────────
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn exec_recursive_expand(
-        &self,
+        &mut self,
         db: &Arc<DatabaseInner>,
         input: Intermediate,
         rel_table_name: &str,
@@ -1095,13 +1016,9 @@ impl Engine {
             }
         }
 
-        let src_col = input
-            .columns
-            .iter()
-            .position(|c| c == src_alias)
-            .ok_or_else(|| {
-                GqliteError::Execution(format!("source alias '{}' not found", src_alias))
-            })?;
+        let src_col = input.columns.iter().position(|c| c == src_alias).ok_or_else(|| {
+            GqliteError::Execution(format!("source alias '{}' not found", src_alias))
+        })?;
 
         let mut out_rows = Vec::new();
 
@@ -1143,7 +1060,7 @@ impl Engine {
                     if let Some(tid) = dst_tid {
                         if let Some(dst_table) = storage.node_tables.get(&tid) {
                             if let Ok(dst_vals) = dst_table.read(*neighbor_offset) {
-                                if dst_vals.get(pk_idx).map_or(true, |v| v.is_null()) {
+                                if dst_vals.get(pk_idx).is_none_or(|v| v.is_null()) {
                                     continue; // deleted node
                                 }
 
@@ -1174,17 +1091,14 @@ impl Engine {
             }
         }
 
-        Ok(Intermediate {
-            columns: out_cols,
-            types: out_types,
-            rows: out_rows,
-        })
+        Ok(Intermediate { columns: out_cols, types: out_types, rows: out_rows })
     }
 
     // ── Shortest Path (BFS with parent tracking) ────────────────
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn exec_shortest_path(
-        &self,
+        &mut self,
         db: &Arc<DatabaseInner>,
         input: Intermediate,
         rel_table_name: &str,
@@ -1213,27 +1127,19 @@ impl Engine {
         });
 
         // Find column indices for src and dst aliases in input
-        let src_col = input
-            .columns
-            .iter()
-            .position(|c| c == src_alias)
-            .ok_or_else(|| {
-                GqliteError::Execution(format!(
-                    "source alias '{}' not found in input columns",
-                    src_alias
-                ))
-            })?;
+        let src_col = input.columns.iter().position(|c| c == src_alias).ok_or_else(|| {
+            GqliteError::Execution(format!(
+                "source alias '{}' not found in input columns",
+                src_alias
+            ))
+        })?;
 
-        let dst_col = input
-            .columns
-            .iter()
-            .position(|c| c == dst_alias)
-            .ok_or_else(|| {
-                GqliteError::Execution(format!(
-                    "destination alias '{}' not found in input columns",
-                    dst_alias
-                ))
-            })?;
+        let dst_col = input.columns.iter().position(|c| c == dst_alias).ok_or_else(|| {
+            GqliteError::Execution(format!(
+                "destination alias '{}' not found in input columns",
+                dst_alias
+            ))
+        })?;
 
         // Build output columns: input cols + path_alias (List)
         let mut out_cols = input.columns.clone();
@@ -1302,10 +1208,7 @@ impl Engine {
                                 continue;
                             }
                             // Add current as a parent of neighbor (may add multiple parents)
-                            parents
-                                .entry(*neighbor_offset)
-                                .or_insert_with(Vec::new)
-                                .push(current);
+                            parents.entry(*neighbor_offset).or_default().push(current);
 
                             if *neighbor_offset == dst_id.offset {
                                 found = true;
@@ -1389,10 +1292,7 @@ impl Engine {
                     let mut path_nodes: Vec<Value> = Vec::new();
                     let mut current = dst_id.offset;
                     while current != u64::MAX {
-                        path_nodes.push(Value::InternalId(InternalId::new(
-                            src_table_id,
-                            current,
-                        )));
+                        path_nodes.push(Value::InternalId(InternalId::new(src_table_id, current)));
                         current = *parent.get(&current).unwrap_or(&u64::MAX);
                     }
                     path_nodes.reverse();
@@ -1406,11 +1306,7 @@ impl Engine {
             // If no path found, skip this row (do not emit)
         }
 
-        Ok(Intermediate {
-            columns: out_cols,
-            types: out_types,
-            rows: out_rows,
-        })
+        Ok(Intermediate { columns: out_cols, types: out_types, rows: out_rows })
     }
 
     /// Reconstruct all shortest paths from `src` to `dst` using the multi-parent map.
@@ -1453,7 +1349,7 @@ impl Engine {
     // ── Cross Join (Task 026 — simplified) ──────────────────────
 
     pub(crate) fn exec_cross_join(
-        &self,
+        &mut self,
         build: Intermediate,
         probe: Intermediate,
     ) -> Result<Intermediate, GqliteError> {
@@ -1471,17 +1367,13 @@ impl Engine {
             }
         }
 
-        Ok(Intermediate {
-            columns: out_cols,
-            types: out_types,
-            rows,
-        })
+        Ok(Intermediate { columns: out_cols, types: out_types, rows })
     }
 
     // ── InsertNode ──────────────────────────────────────────────
 
     fn exec_insert_node(
-        &self,
+        &mut self,
         db: &Arc<DatabaseInner>,
         table_name: &str,
         table_id: u32,
@@ -1491,9 +1383,7 @@ impl Engine {
         let catalog = db.catalog.read().unwrap();
         let entry = catalog
             .get_node_table_by_id(table_id)
-            .ok_or_else(|| {
-                GqliteError::Execution(format!("table '{}' not found", table_name))
-            })?;
+            .ok_or_else(|| GqliteError::Execution(format!("table '{}' not found", table_name)))?;
         let num_cols = entry.columns.len();
         // Identify SERIAL columns
         let serial_cols: Vec<usize> = entry
@@ -1527,11 +1417,14 @@ impl Engine {
         }
 
         // WAL record (before applying)
-        Self::wal_append(db, txn_id, WalPayload::InsertNode {
-            table_name: table_name.to_string(),
-            table_id,
-            values: row.clone(),
-        })?;
+        self.wal_buffer_append(
+            txn_id,
+            WalPayload::InsertNode {
+                table_name: table_name.to_string(),
+                table_id,
+                values: row.clone(),
+            },
+        )?;
 
         let mut storage = db.storage.write().unwrap();
         let node_table = storage.node_tables.get_mut(&table_id).ok_or_else(|| {
@@ -1544,8 +1437,9 @@ impl Engine {
 
     // ── InsertRel ───────────────────────────────────────────────
 
+    #[allow(clippy::too_many_arguments)]
     fn exec_insert_rel(
-        &self,
+        &mut self,
         db: &Arc<DatabaseInner>,
         input: Intermediate,
         rel_table_name: &str,
@@ -1555,28 +1449,17 @@ impl Engine {
         properties: &[(usize, Expr)],
         txn_id: u64,
     ) -> Result<Intermediate, GqliteError> {
-        let src_col = input
-            .columns
-            .iter()
-            .position(|c| c == src_alias)
-            .ok_or_else(|| {
-                GqliteError::Execution(format!("source alias '{}' not found", src_alias))
-            })?;
-        let dst_col = input
-            .columns
-            .iter()
-            .position(|c| c == dst_alias)
-            .ok_or_else(|| {
-                GqliteError::Execution(format!("dest alias '{}' not found", dst_alias))
-            })?;
+        let src_col = input.columns.iter().position(|c| c == src_alias).ok_or_else(|| {
+            GqliteError::Execution(format!("source alias '{}' not found", src_alias))
+        })?;
+        let dst_col = input.columns.iter().position(|c| c == dst_alias).ok_or_else(|| {
+            GqliteError::Execution(format!("dest alias '{}' not found", dst_alias))
+        })?;
 
         // Determine schema column count from catalog for building property vector
         let num_schema_cols = {
             let catalog = db.catalog.read().unwrap();
-            catalog
-                .get_rel_table(rel_table_name)
-                .map(|e| e.columns.len())
-                .unwrap_or(0)
+            catalog.get_rel_table(rel_table_name).map(|e| e.columns.len()).unwrap_or(0)
         };
 
         let mut storage = db.storage.write().unwrap();
@@ -1587,19 +1470,11 @@ impl Engine {
         for row in &input.rows {
             let src_id = match &row[src_col] {
                 Value::InternalId(id) => *id,
-                _ => {
-                    return Err(GqliteError::Execution(
-                        "source is not an InternalId".into(),
-                    ))
-                }
+                _ => return Err(GqliteError::Execution("source is not an InternalId".into())),
             };
             let dst_id = match &row[dst_col] {
                 Value::InternalId(id) => *id,
-                _ => {
-                    return Err(GqliteError::Execution(
-                        "destination is not an InternalId".into(),
-                    ))
-                }
+                _ => return Err(GqliteError::Execution("destination is not an InternalId".into())),
             };
 
             // Build property values vector (aligned with rel table schema)
@@ -1616,13 +1491,16 @@ impl Engine {
                 vec![]
             };
 
-            Self::wal_append(db, txn_id, WalPayload::InsertRel {
-                rel_table_name: rel_table_name.to_string(),
-                rel_table_id,
-                src: src_id,
-                dst: dst_id,
-                properties: prop_values.clone(),
-            })?;
+            self.wal_buffer_append(
+                txn_id,
+                WalPayload::InsertRel {
+                    rel_table_name: rel_table_name.to_string(),
+                    rel_table_id,
+                    src: src_id,
+                    dst: dst_id,
+                    properties: prop_values.clone(),
+                },
+            )?;
 
             rel_table.insert_rel(src_id, dst_id, &prop_values)?;
         }
@@ -1634,7 +1512,7 @@ impl Engine {
     // ── SetProperty ─────────────────────────────────────────────
 
     fn exec_set_property(
-        &self,
+        &mut self,
         db: &Arc<DatabaseInner>,
         input: Intermediate,
         items: &[BoundSetItem],
@@ -1644,15 +1522,9 @@ impl Engine {
         let mut storage = db.storage.write().unwrap();
 
         for item in items {
-            let var_col = input
-                .columns
-                .iter()
-                .position(|c| c == &item.variable)
-                .ok_or_else(|| {
-                    GqliteError::Execution(format!(
-                        "variable '{}' not found",
-                        item.variable
-                    ))
+            let var_col =
+                input.columns.iter().position(|c| c == &item.variable).ok_or_else(|| {
+                    GqliteError::Execution(format!("variable '{}' not found", item.variable))
                 })?;
 
             for row in &input.rows {
@@ -1664,24 +1536,21 @@ impl Engine {
                 let val = self.eval_expr(&item.value, &input.columns, row)?;
 
                 if let Some(entry) = catalog.get_node_table_by_id(id.table_id) {
-                    let col_idx = entry
-                        .columns
-                        .iter()
-                        .position(|c| c.name == item.field)
-                        .ok_or_else(|| {
-                            GqliteError::Execution(format!(
-                                "column '{}' not found",
-                                item.field
-                            ))
-                        })?;
+                    let col_idx =
+                        entry.columns.iter().position(|c| c.name == item.field).ok_or_else(
+                            || GqliteError::Execution(format!("column '{}' not found", item.field)),
+                        )?;
                     if let Some(node_table) = storage.node_tables.get_mut(&id.table_id) {
-                        Self::wal_append(db, txn_id, WalPayload::UpdateProperty {
-                            table_id: id.table_id,
-                            node_offset: id.offset,
-                            col_idx,
-                            new_value: val.clone(),
-                        })?;
-                        node_table.update(id.offset, col_idx, val)?;
+                        self.wal_buffer_append(
+                            txn_id,
+                            WalPayload::UpdateProperty {
+                                table_id: id.table_id,
+                                node_offset: id.offset,
+                                col_idx,
+                                new_value: val.clone(),
+                            },
+                        )?;
+                        node_table.update(id.offset, col_idx, val, txn_id)?;
                     }
                 }
             }
@@ -1693,7 +1562,7 @@ impl Engine {
     // ── Delete ──────────────────────────────────────────────────
 
     fn exec_delete(
-        &self,
+        &mut self,
         db: &Arc<DatabaseInner>,
         input: Intermediate,
         variables: &[String],
@@ -1713,10 +1582,10 @@ impl Engine {
                     _ => continue,
                 };
                 if let Some(node_table) = storage.node_tables.get_mut(&id.table_id) {
-                    Self::wal_append(db, txn_id, WalPayload::DeleteNode {
-                        table_id: id.table_id,
-                        node_offset: id.offset,
-                    })?;
+                    self.wal_buffer_append(
+                        txn_id,
+                        WalPayload::DeleteNode { table_id: id.table_id, node_offset: id.offset },
+                    )?;
                     node_table.delete(id.offset, txn_id)?;
                 }
             }
@@ -1728,7 +1597,7 @@ impl Engine {
     // ── OrderBy (Task 041) ─────────────────────────────────────
 
     pub(crate) fn exec_order_by(
-        &self,
+        &mut self,
         input: Intermediate,
         items: &[OrderByItem],
     ) -> Result<Intermediate, GqliteError> {
@@ -1749,65 +1618,45 @@ impl Engine {
             Ordering::Equal
         });
 
-        Ok(Intermediate {
-            columns: input.columns,
-            types: input.types,
-            rows,
-        })
+        Ok(Intermediate { columns: input.columns, types: input.types, rows })
     }
 
     // ── Limit (Task 041) ───────────────────────────────────────
 
     pub(crate) fn exec_limit(
-        &self,
+        &mut self,
         input: Intermediate,
         count: &Expr,
     ) -> Result<Intermediate, GqliteError> {
         let n = match eval_literal(count)? {
             Value::Int(i) => i.max(0) as usize,
-            _ => {
-                return Err(GqliteError::Execution(
-                    "LIMIT requires an integer".into(),
-                ))
-            }
+            _ => return Err(GqliteError::Execution("LIMIT requires an integer".into())),
         };
 
         let rows = input.rows.into_iter().take(n).collect();
-        Ok(Intermediate {
-            columns: input.columns,
-            types: input.types,
-            rows,
-        })
+        Ok(Intermediate { columns: input.columns, types: input.types, rows })
     }
 
     // ── Skip (Task 041) ────────────────────────────────────────
 
     pub(crate) fn exec_skip(
-        &self,
+        &mut self,
         input: Intermediate,
         count: &Expr,
     ) -> Result<Intermediate, GqliteError> {
         let n = match eval_literal(count)? {
             Value::Int(i) => i.max(0) as usize,
-            _ => {
-                return Err(GqliteError::Execution(
-                    "SKIP requires an integer".into(),
-                ))
-            }
+            _ => return Err(GqliteError::Execution("SKIP requires an integer".into())),
         };
 
         let rows = input.rows.into_iter().skip(n).collect();
-        Ok(Intermediate {
-            columns: input.columns,
-            types: input.types,
-            rows,
-        })
+        Ok(Intermediate { columns: input.columns, types: input.types, rows })
     }
 
     // ── Aggregate (Task 040) ───────────────────────────────────
 
     pub(crate) fn exec_aggregate(
-        &self,
+        &mut self,
         input: Intermediate,
         expressions: &[(Expr, Option<String>)],
     ) -> Result<Intermediate, GqliteError> {
@@ -1858,8 +1707,7 @@ impl Engine {
                     out_row.push(key[group_key_idx].clone());
                     group_key_idx += 1;
                 } else {
-                    let val =
-                        self.eval_aggregate(expr, &input.columns, group_rows)?;
+                    let val = self.eval_aggregate(expr, &input.columns, group_rows)?;
                     out_row.push(val);
                 }
             }
@@ -1877,15 +1725,11 @@ impl Engine {
             }
         }
 
-        Ok(Intermediate {
-            columns: col_names,
-            types: col_types,
-            rows: out_rows,
-        })
+        Ok(Intermediate { columns: col_names, types: col_types, rows: out_rows })
     }
 
     fn eval_aggregate(
-        &self,
+        &mut self,
         expr: &Expr,
         columns: &[String],
         rows: &[Vec<Value>],
@@ -1894,21 +1738,15 @@ impl Engine {
             Expr::FunctionCall { name, args, .. } => {
                 let func_name = name.to_lowercase();
                 let is_count_star = func_name == "count"
-                    && (args.is_empty()
-                        || matches!(args.first(), Some(Expr::Star)));
+                    && (args.is_empty() || matches!(args.first(), Some(Expr::Star)));
 
                 let mut accumulator = if is_count_star {
-                    Box::new(
-                        crate::functions::aggregate::CountAccumulator::new_star(),
-                    ) as Box<dyn crate::functions::registry::AggregateAccumulator>
+                    Box::new(crate::functions::aggregate::CountAccumulator::new_star())
+                        as Box<dyn crate::functions::registry::AggregateAccumulator>
                 } else {
-                    crate::functions::registry::create_accumulator(&func_name)
-                        .ok_or_else(|| {
-                            GqliteError::Execution(format!(
-                                "unknown aggregate '{}'",
-                                name
-                            ))
-                        })?
+                    crate::functions::registry::create_accumulator(&func_name).ok_or_else(|| {
+                        GqliteError::Execution(format!("unknown aggregate '{}'", name))
+                    })?
                 };
 
                 for row in rows {
@@ -1924,16 +1762,14 @@ impl Engine {
 
                 Ok(accumulator.finalize())
             }
-            _ => Err(GqliteError::Execution(
-                "expected aggregate function call".into(),
-            )),
+            _ => Err(GqliteError::Execution("expected aggregate function call".into())),
         }
     }
 
     // ── Union ───────────────────────────────────────────────────
 
     pub(crate) fn exec_union(
-        &self,
+        &mut self,
         left: Intermediate,
         right: Intermediate,
         all: bool,
@@ -1953,17 +1789,13 @@ impl Engine {
             });
         }
 
-        Ok(Intermediate {
-            columns,
-            types,
-            rows,
-        })
+        Ok(Intermediate { columns, types, rows })
     }
 
     // ── Unwind ──────────────────────────────────────────────────
 
     pub(crate) fn exec_unwind(
-        &self,
+        &mut self,
         input: Intermediate,
         expr: &Expr,
         alias: &str,
@@ -1996,17 +1828,13 @@ impl Engine {
             }
         }
 
-        Ok(Intermediate {
-            columns: out_cols,
-            types: out_types,
-            rows: out_rows,
-        })
+        Ok(Intermediate { columns: out_cols, types: out_types, rows: out_rows })
     }
 
     // ── CallSubquery ──────────────────────────────────────────────
 
     pub(crate) fn exec_call_subquery(
-        &self,
+        &mut self,
         input: &PhysicalPlan,
         subquery: &QueryStatement,
         db: &Arc<DatabaseInner>,
@@ -2044,8 +1872,9 @@ impl Engine {
 
     // ── Merge (upsert) ─────────────────────────────────────────
 
+    #[allow(clippy::too_many_arguments)]
     fn exec_merge(
-        &self,
+        &mut self,
         db: &Arc<DatabaseInner>,
         table_name: &str,
         table_id: u32,
@@ -2055,9 +1884,9 @@ impl Engine {
         txn_id: u64,
     ) -> Result<Intermediate, GqliteError> {
         let catalog = db.catalog.read().unwrap();
-        let entry = catalog.get_node_table(table_name).ok_or_else(|| {
-            GqliteError::Execution(format!("table '{}' not found", table_name))
-        })?;
+        let entry = catalog
+            .get_node_table(table_name)
+            .ok_or_else(|| GqliteError::Execution(format!("table '{}' not found", table_name)))?;
 
         let pk_idx = entry.primary_key_idx;
         let num_cols = entry.columns.len();
@@ -2080,15 +1909,14 @@ impl Engine {
         let total_rows = node_table.row_count();
         let mut found_offset = None;
         for offset in 0..total_rows {
-            if let Ok(vals) = node_table.read(offset as u64) {
-                if vals.get(pk_idx).map_or(true, |v| v.is_null()) {
+            if let Ok(vals) = node_table.read(offset) {
+                if vals.get(pk_idx).is_none_or(|v| v.is_null()) {
                     continue; // deleted
                 }
-                let matches = match_props.iter().all(|(idx, val)| {
-                    vals.get(*idx).map_or(false, |v| v == val)
-                });
+                let matches =
+                    match_props.iter().all(|(idx, val)| vals.get(*idx).is_some_and(|v| v == val));
                 if matches {
-                    found_offset = Some(offset as u64);
+                    found_offset = Some(offset);
                     break;
                 }
             }
@@ -2103,7 +1931,7 @@ impl Engine {
                 let node_table = storage.node_tables.get_mut(&table_id).unwrap();
                 for (idx, expr) in on_match {
                     let val = self.eval_expr(expr, &[], &[])?;
-                    node_table.update(offset, *idx, val)?;
+                    node_table.update(offset, *idx, val, txn_id)?;
                 }
             }
         } else {
@@ -2119,8 +1947,7 @@ impl Engine {
             }
 
             // WAL record
-            Self::wal_append(
-                db,
+            self.wal_buffer_append(
                 txn_id,
                 WalPayload::InsertNode {
                     table_name: table_name.to_string(),
@@ -2140,7 +1967,7 @@ impl Engine {
     // ── Expression evaluator ────────────────────────────────────
 
     fn eval_expr(
-        &self,
+        &mut self,
         expr: &Expr,
         columns: &[String],
         row: &[Value],
@@ -2156,29 +1983,16 @@ impl Engine {
                 .iter()
                 .position(|c| c == name)
                 .map(|idx| row[idx].clone())
-                .ok_or_else(|| {
-                    GqliteError::Execution(format!("variable '{}' not found", name))
-                }),
+                .ok_or_else(|| GqliteError::Execution(format!("variable '{}' not found", name))),
 
             Expr::Property(base, field) => {
                 let col_name = match base.as_ref() {
                     Expr::Ident(var) => format!("{}.{}", var, field),
-                    _ => {
-                        return Err(GqliteError::Execution(
-                            "invalid property access".into(),
-                        ))
-                    }
+                    _ => return Err(GqliteError::Execution("invalid property access".into())),
                 };
-                columns
-                    .iter()
-                    .position(|c| c == &col_name)
-                    .map(|idx| row[idx].clone())
-                    .ok_or_else(|| {
-                        GqliteError::Execution(format!(
-                            "property '{}' not found",
-                            col_name
-                        ))
-                    })
+                columns.iter().position(|c| c == &col_name).map(|idx| row[idx].clone()).ok_or_else(
+                    || GqliteError::Execution(format!("property '{}' not found", col_name)),
+                )
             }
 
             Expr::BinaryOp { left, op, right } => {
@@ -2218,10 +2032,7 @@ impl Engine {
                 if let Some(func) = registry.get_scalar(name) {
                     func(&arg_vals)
                 } else {
-                    Err(GqliteError::Execution(format!(
-                        "unknown function '{}'",
-                        name
-                    )))
+                    Err(GqliteError::Execution(format!("unknown function '{}'", name)))
                 }
             }
 
@@ -2269,9 +2080,7 @@ impl Engine {
             }
 
             Expr::Star => Ok(Value::Null),
-            Expr::Param(name) => {
-                Ok(self.params.get(name).cloned().unwrap_or(Value::Null))
-            }
+            Expr::Param(name) => Ok(self.params.get(name).cloned().unwrap_or(Value::Null)),
 
             Expr::In { expr, list, negated } => {
                 let val = self.eval_expr(expr, columns, row)?;
@@ -2313,18 +2122,16 @@ impl Engine {
                 // passing the current outer row as scope so that unlabeled node
                 // scans can resolve correlated variables (e.g., `(p)` in the
                 // inner MATCH refers to the outer `p`).
-                let inner_engine = Engine {
+                let mut inner_engine = Engine {
                     params: self.params.clone(),
                     start_ts: self.start_ts,
                     db: self.db.clone(),
                     outer_scope: Some((columns.to_vec(), row.to_vec())),
+                    wal_buffer: Vec::new(),
                 };
                 let inner_txn = db_arc.txn_manager.begin_read_only();
-                let inner_result = inner_engine.execute_operator(
-                    &physical_plan,
-                    db_arc,
-                    inner_txn.id,
-                )?;
+                let inner_result =
+                    inner_engine.execute_operator(&physical_plan, db_arc, inner_txn.id)?;
 
                 // EXISTS returns true if the inner query produces at least one row.
                 Ok(Value::Bool(!inner_result.rows.is_empty()))
@@ -2371,16 +2178,12 @@ impl Default for Engine {
 }
 
 impl Engine {
-    /// Helper: append a WAL record if the database has a WAL writer.
-    fn wal_append(
-        db: &Arc<DatabaseInner>,
-        txn_id: u64,
-        payload: WalPayload,
-    ) -> Result<(), GqliteError> {
-        let mut wal_guard = db.wal.lock();
-        if let Some(wal) = wal_guard.as_mut() {
-            wal.append(&WalRecord { txn_id, payload })?;
-        }
+    /// Helper: buffer a WAL record for later commit.
+    ///
+    /// Instead of writing to WAL immediately, records are buffered in memory.
+    /// They are flushed to WAL atomically during commit in Connection::execute_statement.
+    fn wal_buffer_append(&mut self, txn_id: u64, payload: WalPayload) -> Result<(), GqliteError> {
+        self.wal_buffer.push(WalRecord { txn_id, payload });
         Ok(())
     }
 }
@@ -2395,9 +2198,21 @@ fn eval_literal(expr: &Expr) -> Result<Value, GqliteError> {
         Expr::StringLit(s) => Ok(Value::String(s.clone())),
         Expr::BoolLit(b) => Ok(Value::Bool(*b)),
         Expr::NullLit => Ok(Value::Null),
-        _ => Err(GqliteError::Execution(
-            "expression requires row context".into(),
-        )),
+        Expr::UnaryOp { op: UnaryOp::Neg, expr: inner } => match eval_literal(inner)? {
+            Value::Int(i) => Ok(Value::Int(-i)),
+            Value::Float(f) => Ok(Value::Float(-f)),
+            other => Err(GqliteError::Execution(format!("cannot negate value: {:?}", other))),
+        },
+        Expr::UnaryOp { op: UnaryOp::Not, expr: inner } => match eval_literal(inner)? {
+            Value::Bool(b) => Ok(Value::Bool(!b)),
+            Value::Null => Ok(Value::Null),
+            other => Err(GqliteError::Execution(format!("cannot apply NOT to value: {:?}", other))),
+        },
+        Expr::ListLit(items) => {
+            let vals: Result<Vec<Value>, _> = items.iter().map(eval_literal).collect();
+            Ok(Value::List(vals?))
+        }
+        _ => Err(GqliteError::Execution("expression requires row context".into())),
     }
 }
 
@@ -2416,10 +2231,7 @@ fn cast_value(v: Value, target: &DataType) -> Result<Value, GqliteError> {
                 .parse::<i64>()
                 .map(Value::Int)
                 .map_err(|_| GqliteError::Execution(format!("cannot cast '{}' to INT64", s))),
-            _ => Err(GqliteError::Execution(format!(
-                "cannot cast {} to INT64",
-                v
-            ))),
+            _ => Err(GqliteError::Execution(format!("cannot cast {} to INT64", v))),
         },
         DataType::Double => match &v {
             Value::Float(_) => Ok(v),
@@ -2430,10 +2242,7 @@ fn cast_value(v: Value, target: &DataType) -> Result<Value, GqliteError> {
                 .parse::<f64>()
                 .map(Value::Float)
                 .map_err(|_| GqliteError::Execution(format!("cannot cast '{}' to DOUBLE", s))),
-            _ => Err(GqliteError::Execution(format!(
-                "cannot cast {} to DOUBLE",
-                v
-            ))),
+            _ => Err(GqliteError::Execution(format!("cannot cast {} to DOUBLE", v))),
         },
         DataType::String => Ok(Value::String(v.to_string())),
         DataType::Bool => match &v {
@@ -2442,22 +2251,14 @@ fn cast_value(v: Value, target: &DataType) -> Result<Value, GqliteError> {
             Value::String(s) => match s.to_lowercase().as_str() {
                 "true" | "1" | "yes" => Ok(Value::Bool(true)),
                 "false" | "0" | "no" => Ok(Value::Bool(false)),
-                _ => Err(GqliteError::Execution(format!(
-                    "cannot cast '{}' to BOOL",
-                    s
-                ))),
+                _ => Err(GqliteError::Execution(format!("cannot cast '{}' to BOOL", s))),
             },
-            _ => Err(GqliteError::Execution(format!(
-                "cannot cast {} to BOOL",
-                v
-            ))),
+            _ => Err(GqliteError::Execution(format!("cannot cast {} to BOOL", v))),
         },
-        DataType::InternalId => Err(GqliteError::Execution(
-            "cannot cast to InternalId".into(),
-        )),
-        DataType::Date | DataType::DateTime | DataType::Duration => Err(GqliteError::Execution(
-            format!("cannot cast to {}", target),
-        )),
+        DataType::InternalId => Err(GqliteError::Execution("cannot cast to InternalId".into())),
+        DataType::Date | DataType::DateTime | DataType::Duration => {
+            Err(GqliteError::Execution(format!("cannot cast to {}", target)))
+        }
     }
 }
 
@@ -2484,9 +2285,7 @@ fn eval_binary_op(left: &Value, op: &BinOp, right: &Value) -> Result<Value, Gqli
             (Value::Float(a), Value::Float(b)) => Ok(Value::Float(a + b)),
             (Value::Int(a), Value::Float(b)) => Ok(Value::Float(*a as f64 + b)),
             (Value::Float(a), Value::Int(b)) => Ok(Value::Float(a + *b as f64)),
-            (Value::String(a), Value::String(b)) => {
-                Ok(Value::String(format!("{}{}", a, b)))
-            }
+            (Value::String(a), Value::String(b)) => Ok(Value::String(format!("{}{}", a, b))),
             _ => Ok(Value::Null),
         },
         BinOp::Sub => match (left, right) {
@@ -2503,42 +2302,34 @@ fn eval_binary_op(left: &Value, op: &BinOp, right: &Value) -> Result<Value, Gqli
             (Value::Float(a), Value::Int(b)) => Ok(Value::Float(a * *b as f64)),
             _ => Ok(Value::Null),
         },
-        BinOp::Div => {
-            match (left, right) {
-                (Value::Int(_), Value::Int(0)) => {
-                    Err(GqliteError::Execution("division by zero".into()))
-                }
-                (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a / b)),
-                (Value::Float(a), Value::Float(b)) if *b == 0.0 => {
-                    Err(GqliteError::Execution("division by zero".into()))
-                }
-                (Value::Float(a), Value::Float(b)) => Ok(Value::Float(a / b)),
-                (Value::Int(a), Value::Float(b)) if *b == 0.0 => {
-                    Err(GqliteError::Execution("division by zero".into()))
-                }
-                (Value::Int(a), Value::Float(b)) => Ok(Value::Float(*a as f64 / b)),
-                (Value::Float(_), Value::Int(0)) => {
-                    Err(GqliteError::Execution("division by zero".into()))
-                }
-                (Value::Float(a), Value::Int(b)) => Ok(Value::Float(a / *b as f64)),
-                _ => Ok(Value::Null),
-            }
-        }
-        BinOp::Mod => match (left, right) {
+        BinOp::Div => match (left, right) {
             (Value::Int(_), Value::Int(0)) => {
-                Err(GqliteError::Execution("modulo by zero".into()))
+                Err(GqliteError::Execution("division by zero".into()))
             }
+            (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a / b)),
+            (Value::Float(a), Value::Float(b)) if *b == 0.0 => {
+                Err(GqliteError::Execution("division by zero".into()))
+            }
+            (Value::Float(a), Value::Float(b)) => Ok(Value::Float(a / b)),
+            (Value::Int(a), Value::Float(b)) if *b == 0.0 => {
+                Err(GqliteError::Execution("division by zero".into()))
+            }
+            (Value::Int(a), Value::Float(b)) => Ok(Value::Float(*a as f64 / b)),
+            (Value::Float(_), Value::Int(0)) => {
+                Err(GqliteError::Execution("division by zero".into()))
+            }
+            (Value::Float(a), Value::Int(b)) => Ok(Value::Float(a / *b as f64)),
+            _ => Ok(Value::Null),
+        },
+        BinOp::Mod => match (left, right) {
+            (Value::Int(_), Value::Int(0)) => Err(GqliteError::Execution("modulo by zero".into())),
             (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a % b)),
             _ => Ok(Value::Null),
         },
         BinOp::Eq => Ok(Value::Bool(left == right)),
         BinOp::Neq => Ok(Value::Bool(left != right)),
-        BinOp::Lt => Ok(Value::Bool(
-            compare_values(left, right) == Some(Ordering::Less),
-        )),
-        BinOp::Gt => Ok(Value::Bool(
-            compare_values(left, right) == Some(Ordering::Greater),
-        )),
+        BinOp::Lt => Ok(Value::Bool(compare_values(left, right) == Some(Ordering::Less))),
+        BinOp::Gt => Ok(Value::Bool(compare_values(left, right) == Some(Ordering::Greater))),
         BinOp::Le => Ok(Value::Bool(matches!(
             compare_values(left, right),
             Some(Ordering::Less | Ordering::Equal)
@@ -2643,30 +2434,25 @@ fn parse_csv_value(field: &str, dt: &DataType) -> Result<Value, GqliteError> {
         DataType::Bool => match field.to_lowercase().as_str() {
             "true" | "1" | "t" | "yes" => Ok(Value::Bool(true)),
             "false" | "0" | "f" | "no" => Ok(Value::Bool(false)),
-            _ => Err(GqliteError::Other(format!(
-                "cannot parse '{}' as BOOL",
-                field
-            ))),
+            _ => Err(GqliteError::Other(format!("cannot parse '{}' as BOOL", field))),
         },
         DataType::Int64 | DataType::Serial => {
-            let i: i64 = field.parse().map_err(|_| {
-                GqliteError::Other(format!("cannot parse '{}' as INT64", field))
-            })?;
+            let i: i64 = field
+                .parse()
+                .map_err(|_| GqliteError::Other(format!("cannot parse '{}' as INT64", field)))?;
             Ok(Value::Int(i))
         }
         DataType::Double => {
-            let f: f64 = field.parse().map_err(|_| {
-                GqliteError::Other(format!("cannot parse '{}' as DOUBLE", field))
-            })?;
+            let f: f64 = field
+                .parse()
+                .map_err(|_| GqliteError::Other(format!("cannot parse '{}' as DOUBLE", field)))?;
             Ok(Value::Float(f))
         }
         DataType::String => Ok(Value::String(field.to_string())),
-        DataType::InternalId => Err(GqliteError::Other(
-            "cannot import InternalId from CSV".into(),
-        )),
-        DataType::Date | DataType::DateTime | DataType::Duration => Err(GqliteError::Other(
-            format!("cannot import {} from CSV", dt),
-        )),
+        DataType::InternalId => Err(GqliteError::Other("cannot import InternalId from CSV".into())),
+        DataType::Date | DataType::DateTime | DataType::Duration => {
+            Err(GqliteError::Other(format!("cannot import {} from CSV", dt)))
+        }
     }
 }
 
@@ -2680,13 +2466,14 @@ fn value_to_csv_string(v: &Value) -> String {
         Value::String(s) => s.clone(),
         Value::InternalId(id) => format!("{}:{}", id.table_id, id.offset),
         Value::List(items) => {
-            let parts: Vec<String> = items.iter().map(|v| value_to_csv_string(v)).collect();
+            let parts: Vec<String> = items.iter().map(value_to_csv_string).collect();
             format!("[{}]", parts.join(","))
         }
-        Value::Bytes(b) => format!("0x{}", b.iter().map(|byte| format!("{:02x}", byte)).collect::<String>()),
+        Value::Bytes(b) => {
+            format!("0x{}", b.iter().map(|byte| format!("{:02x}", byte)).collect::<String>())
+        }
         Value::Date(d) => d.to_string(),
         Value::DateTime(dt) => dt.to_string(),
         Value::Duration(ms) => format!("PT{}S", *ms as f64 / 1000.0),
     }
 }
-

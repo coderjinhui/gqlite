@@ -103,10 +103,7 @@ fn orderby_creates_two_pipelines() {
         columns: vec![0, 1],
         alias: "n".into(),
     };
-    let plan = PhysicalPlan::OrderBy {
-        input: Box::new(scan),
-        items: vec![],
-    };
+    let plan = PhysicalPlan::OrderBy { input: Box::new(scan), items: vec![] };
     let graph = split_into_pipelines(&plan);
     assert_eq!(graph.pipelines.len(), 2);
     assert_eq!(graph.pipelines[1].depends_on, vec![0]);
@@ -120,10 +117,7 @@ fn aggregate_creates_two_pipelines() {
         columns: vec![0, 1],
         alias: "n".into(),
     };
-    let plan = PhysicalPlan::Aggregate {
-        input: Box::new(scan),
-        expressions: vec![],
-    };
+    let plan = PhysicalPlan::Aggregate { input: Box::new(scan), expressions: vec![] };
     let graph = split_into_pipelines(&plan);
     assert_eq!(graph.pipelines.len(), 2);
     assert_eq!(graph.pipelines[1].depends_on, vec![0]);

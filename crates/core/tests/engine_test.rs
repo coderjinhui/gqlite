@@ -1,18 +1,14 @@
-use std::collections::HashMap;
-use gqlite_core::Database;
 use gqlite_core::executor::engine::Engine;
 use gqlite_core::types::value::Value;
+use gqlite_core::Database;
+use std::collections::HashMap;
 
 #[test]
 fn ddl_create_and_drop() {
     let db = Database::in_memory();
-    db.execute(
-        "CREATE NODE TABLE Person (id INT64, name STRING, PRIMARY KEY (id))",
-    )
-    .unwrap();
-    let result = db
-        .execute("CREATE NODE TABLE Movie (id INT64, title STRING, PRIMARY KEY (id))")
-        .unwrap();
+    db.execute("CREATE NODE TABLE Person (id INT64, name STRING, PRIMARY KEY (id))").unwrap();
+    let result =
+        db.execute("CREATE NODE TABLE Movie (id INT64, title STRING, PRIMARY KEY (id))").unwrap();
     assert!(result.is_empty());
 
     db.execute("DROP TABLE Movie").unwrap();
@@ -21,22 +17,13 @@ fn ddl_create_and_drop() {
 #[test]
 fn insert_and_scan() {
     let db = Database::in_memory();
-    db.execute(
-        "CREATE NODE TABLE Person (id INT64, name STRING, PRIMARY KEY (id))",
-    )
-    .unwrap();
-    db.execute("CREATE (n:Person {id: 1, name: 'Alice'})")
-        .unwrap();
-    db.execute("CREATE (n:Person {id: 2, name: 'Bob'})")
-        .unwrap();
+    db.execute("CREATE NODE TABLE Person (id INT64, name STRING, PRIMARY KEY (id))").unwrap();
+    db.execute("CREATE (n:Person {id: 1, name: 'Alice'})").unwrap();
+    db.execute("CREATE (n:Person {id: 2, name: 'Bob'})").unwrap();
 
     let result = db.query("MATCH (n:Person) RETURN n.name").unwrap();
     assert_eq!(result.num_rows(), 2);
-    let names: Vec<&str> = result
-        .rows()
-        .iter()
-        .map(|r| r.get_string(0).unwrap())
-        .collect();
+    let names: Vec<&str> = result.rows().iter().map(|r| r.get_string(0).unwrap()).collect();
     assert!(names.contains(&"Alice"));
     assert!(names.contains(&"Bob"));
 }
@@ -44,32 +31,21 @@ fn insert_and_scan() {
 #[test]
 fn filter_predicate() {
     let db = Database::in_memory();
-    db.execute(
-        "CREATE NODE TABLE Person (id INT64, name STRING, age INT64, PRIMARY KEY (id))",
-    )
-    .unwrap();
-    db.execute("CREATE (n:Person {id: 1, name: 'Alice', age: 30})")
+    db.execute("CREATE NODE TABLE Person (id INT64, name STRING, age INT64, PRIMARY KEY (id))")
         .unwrap();
-    db.execute("CREATE (n:Person {id: 2, name: 'Bob', age: 25})")
-        .unwrap();
-    db.execute("CREATE (n:Person {id: 3, name: 'Charlie', age: 35})")
-        .unwrap();
+    db.execute("CREATE (n:Person {id: 1, name: 'Alice', age: 30})").unwrap();
+    db.execute("CREATE (n:Person {id: 2, name: 'Bob', age: 25})").unwrap();
+    db.execute("CREATE (n:Person {id: 3, name: 'Charlie', age: 35})").unwrap();
 
-    let result = db
-        .query("MATCH (n:Person) WHERE n.age > 28 RETURN n.name")
-        .unwrap();
+    let result = db.query("MATCH (n:Person) WHERE n.age > 28 RETURN n.name").unwrap();
     assert_eq!(result.num_rows(), 2);
 }
 
 #[test]
 fn return_all() {
     let db = Database::in_memory();
-    db.execute(
-        "CREATE NODE TABLE Person (id INT64, name STRING, PRIMARY KEY (id))",
-    )
-    .unwrap();
-    db.execute("CREATE (n:Person {id: 1, name: 'Alice'})")
-        .unwrap();
+    db.execute("CREATE NODE TABLE Person (id INT64, name STRING, PRIMARY KEY (id))").unwrap();
+    db.execute("CREATE (n:Person {id: 1, name: 'Alice'})").unwrap();
 
     let result = db.query("MATCH (n:Person) RETURN *").unwrap();
     assert_eq!(result.num_rows(), 1);
@@ -80,16 +56,10 @@ fn return_all() {
 #[test]
 fn relationship_expand() {
     let db = Database::in_memory();
-    db.execute(
-        "CREATE NODE TABLE Person (id INT64, name STRING, PRIMARY KEY (id))",
-    )
-    .unwrap();
-    db.execute("CREATE REL TABLE KNOWS (FROM Person TO Person)")
-        .unwrap();
-    db.execute("CREATE (n:Person {id: 1, name: 'Alice'})")
-        .unwrap();
-    db.execute("CREATE (n:Person {id: 2, name: 'Bob'})")
-        .unwrap();
+    db.execute("CREATE NODE TABLE Person (id INT64, name STRING, PRIMARY KEY (id))").unwrap();
+    db.execute("CREATE REL TABLE KNOWS (FROM Person TO Person)").unwrap();
+    db.execute("CREATE (n:Person {id: 1, name: 'Alice'})").unwrap();
+    db.execute("CREATE (n:Person {id: 2, name: 'Bob'})").unwrap();
 
     // Create relationship
     db.execute(
@@ -98,9 +68,7 @@ fn relationship_expand() {
     .unwrap();
 
     // Query relationships
-    let result = db
-        .query("MATCH (a:Person)-[r:KNOWS]->(b:Person) RETURN a.name, b.name")
-        .unwrap();
+    let result = db.query("MATCH (a:Person)-[r:KNOWS]->(b:Person) RETURN a.name, b.name").unwrap();
     assert_eq!(result.num_rows(), 1);
     assert_eq!(result.rows()[0].get_string(0), Some("Alice"));
     assert_eq!(result.rows()[0].get_string(1), Some("Bob"));
@@ -109,19 +77,12 @@ fn relationship_expand() {
 #[test]
 fn set_property() {
     let db = Database::in_memory();
-    db.execute(
-        "CREATE NODE TABLE Person (id INT64, name STRING, PRIMARY KEY (id))",
-    )
-    .unwrap();
-    db.execute("CREATE (n:Person {id: 1, name: 'Alice'})")
-        .unwrap();
+    db.execute("CREATE NODE TABLE Person (id INT64, name STRING, PRIMARY KEY (id))").unwrap();
+    db.execute("CREATE (n:Person {id: 1, name: 'Alice'})").unwrap();
 
-    db.execute("MATCH (n:Person) WHERE n.id = 1 SET n.name = 'Updated'")
-        .unwrap();
+    db.execute("MATCH (n:Person) WHERE n.id = 1 SET n.name = 'Updated'").unwrap();
 
-    let result = db
-        .query("MATCH (n:Person) WHERE n.id = 1 RETURN n.name")
-        .unwrap();
+    let result = db.query("MATCH (n:Person) WHERE n.id = 1 RETURN n.name").unwrap();
     assert_eq!(result.num_rows(), 1);
     assert_eq!(result.rows()[0].get_string(0), Some("Updated"));
 }
@@ -129,17 +90,11 @@ fn set_property() {
 #[test]
 fn delete_node() {
     let db = Database::in_memory();
-    db.execute(
-        "CREATE NODE TABLE Person (id INT64, name STRING, PRIMARY KEY (id))",
-    )
-    .unwrap();
-    db.execute("CREATE (n:Person {id: 1, name: 'Alice'})")
-        .unwrap();
-    db.execute("CREATE (n:Person {id: 2, name: 'Bob'})")
-        .unwrap();
+    db.execute("CREATE NODE TABLE Person (id INT64, name STRING, PRIMARY KEY (id))").unwrap();
+    db.execute("CREATE (n:Person {id: 1, name: 'Alice'})").unwrap();
+    db.execute("CREATE (n:Person {id: 2, name: 'Bob'})").unwrap();
 
-    db.execute("MATCH (n:Person) WHERE n.id = 1 DELETE n")
-        .unwrap();
+    db.execute("MATCH (n:Person) WHERE n.id = 1 DELETE n").unwrap();
 
     let result = db.query("MATCH (n:Person) RETURN n.name").unwrap();
     assert_eq!(result.num_rows(), 1);
@@ -149,15 +104,10 @@ fn delete_node() {
 #[test]
 fn expression_arithmetic() {
     let db = Database::in_memory();
-    db.execute(
-        "CREATE NODE TABLE Num (id INT64, val INT64, PRIMARY KEY (id))",
-    )
-    .unwrap();
+    db.execute("CREATE NODE TABLE Num (id INT64, val INT64, PRIMARY KEY (id))").unwrap();
     db.execute("CREATE (n:Num {id: 1, val: 10})").unwrap();
 
-    let result = db
-        .query("MATCH (n:Num) RETURN n.val + 5")
-        .unwrap();
+    let result = db.query("MATCH (n:Num) RETURN n.val + 5").unwrap();
     assert_eq!(result.num_rows(), 1);
     assert_eq!(result.rows()[0].get_int(0), Some(15));
 }
@@ -165,16 +115,10 @@ fn expression_arithmetic() {
 #[test]
 fn scalar_function_in_projection() {
     let db = Database::in_memory();
-    db.execute(
-        "CREATE NODE TABLE Person (id INT64, name STRING, PRIMARY KEY (id))",
-    )
-    .unwrap();
-    db.execute("CREATE (n:Person {id: 1, name: 'Alice'})")
-        .unwrap();
+    db.execute("CREATE NODE TABLE Person (id INT64, name STRING, PRIMARY KEY (id))").unwrap();
+    db.execute("CREATE (n:Person {id: 1, name: 'Alice'})").unwrap();
 
-    let result = db
-        .query("MATCH (n:Person) RETURN upper(n.name)")
-        .unwrap();
+    let result = db.query("MATCH (n:Person) RETURN upper(n.name)").unwrap();
     assert_eq!(result.num_rows(), 1);
     assert_eq!(result.rows()[0].get_string(0), Some("ALICE"));
 }
@@ -182,18 +126,12 @@ fn scalar_function_in_projection() {
 // ── ORDER BY tests ──────────────────────────────────────────
 
 fn setup_persons(db: &Database) {
-    db.execute(
-        "CREATE NODE TABLE Person (id INT64, name STRING, age INT64, PRIMARY KEY (id))",
-    )
-    .unwrap();
-    db.execute("CREATE (n:Person {id: 1, name: 'Alice', age: 30})")
+    db.execute("CREATE NODE TABLE Person (id INT64, name STRING, age INT64, PRIMARY KEY (id))")
         .unwrap();
-    db.execute("CREATE (n:Person {id: 2, name: 'Bob', age: 25})")
-        .unwrap();
-    db.execute("CREATE (n:Person {id: 3, name: 'Charlie', age: 35})")
-        .unwrap();
-    db.execute("CREATE (n:Person {id: 4, name: 'Diana', age: 28})")
-        .unwrap();
+    db.execute("CREATE (n:Person {id: 1, name: 'Alice', age: 30})").unwrap();
+    db.execute("CREATE (n:Person {id: 2, name: 'Bob', age: 25})").unwrap();
+    db.execute("CREATE (n:Person {id: 3, name: 'Charlie', age: 35})").unwrap();
+    db.execute("CREATE (n:Person {id: 4, name: 'Diana', age: 28})").unwrap();
 }
 
 #[test]
@@ -201,9 +139,7 @@ fn order_by_asc() {
     let db = Database::in_memory();
     setup_persons(&db);
 
-    let result = db
-        .query("MATCH (n:Person) RETURN n.name ORDER BY n.age")
-        .unwrap();
+    let result = db.query("MATCH (n:Person) RETURN n.name ORDER BY n.age").unwrap();
     assert_eq!(result.num_rows(), 4);
     assert_eq!(result.rows()[0].get_string(0), Some("Bob"));
     assert_eq!(result.rows()[1].get_string(0), Some("Diana"));
@@ -216,9 +152,7 @@ fn order_by_desc() {
     let db = Database::in_memory();
     setup_persons(&db);
 
-    let result = db
-        .query("MATCH (n:Person) RETURN n.name ORDER BY n.age DESC")
-        .unwrap();
+    let result = db.query("MATCH (n:Person) RETURN n.name ORDER BY n.age DESC").unwrap();
     assert_eq!(result.num_rows(), 4);
     assert_eq!(result.rows()[0].get_string(0), Some("Charlie"));
     assert_eq!(result.rows()[1].get_string(0), Some("Alice"));
@@ -231,9 +165,7 @@ fn order_by_string() {
     let db = Database::in_memory();
     setup_persons(&db);
 
-    let result = db
-        .query("MATCH (n:Person) RETURN n.name ORDER BY n.name")
-        .unwrap();
+    let result = db.query("MATCH (n:Person) RETURN n.name ORDER BY n.name").unwrap();
     assert_eq!(result.num_rows(), 4);
     assert_eq!(result.rows()[0].get_string(0), Some("Alice"));
     assert_eq!(result.rows()[1].get_string(0), Some("Bob"));
@@ -248,9 +180,7 @@ fn limit_results() {
     let db = Database::in_memory();
     setup_persons(&db);
 
-    let result = db
-        .query("MATCH (n:Person) RETURN n.name LIMIT 2")
-        .unwrap();
+    let result = db.query("MATCH (n:Person) RETURN n.name LIMIT 2").unwrap();
     assert_eq!(result.num_rows(), 2);
 }
 
@@ -259,9 +189,7 @@ fn limit_larger_than_result() {
     let db = Database::in_memory();
     setup_persons(&db);
 
-    let result = db
-        .query("MATCH (n:Person) RETURN n.name LIMIT 100")
-        .unwrap();
+    let result = db.query("MATCH (n:Person) RETURN n.name LIMIT 100").unwrap();
     assert_eq!(result.num_rows(), 4);
 }
 
@@ -272,9 +200,7 @@ fn skip_results() {
     let db = Database::in_memory();
     setup_persons(&db);
 
-    let result = db
-        .query("MATCH (n:Person) RETURN n.name ORDER BY n.age SKIP 2")
-        .unwrap();
+    let result = db.query("MATCH (n:Person) RETURN n.name ORDER BY n.age SKIP 2").unwrap();
     assert_eq!(result.num_rows(), 2);
     assert_eq!(result.rows()[0].get_string(0), Some("Alice"));
     assert_eq!(result.rows()[1].get_string(0), Some("Charlie"));
@@ -285,9 +211,7 @@ fn skip_and_limit() {
     let db = Database::in_memory();
     setup_persons(&db);
 
-    let result = db
-        .query("MATCH (n:Person) RETURN n.name ORDER BY n.age SKIP 1 LIMIT 2")
-        .unwrap();
+    let result = db.query("MATCH (n:Person) RETURN n.name ORDER BY n.age SKIP 1 LIMIT 2").unwrap();
     assert_eq!(result.num_rows(), 2);
     assert_eq!(result.rows()[0].get_string(0), Some("Diana"));
     assert_eq!(result.rows()[1].get_string(0), Some("Alice"));
@@ -300,9 +224,7 @@ fn count_star() {
     let db = Database::in_memory();
     setup_persons(&db);
 
-    let result = db
-        .query("MATCH (n:Person) RETURN count(*)")
-        .unwrap();
+    let result = db.query("MATCH (n:Person) RETURN count(*)").unwrap();
     assert_eq!(result.num_rows(), 1);
     assert_eq!(result.rows()[0].get_int(0), Some(4));
 }
@@ -312,9 +234,7 @@ fn count_expression() {
     let db = Database::in_memory();
     setup_persons(&db);
 
-    let result = db
-        .query("MATCH (n:Person) RETURN count(n)")
-        .unwrap();
+    let result = db.query("MATCH (n:Person) RETURN count(n)").unwrap();
     assert_eq!(result.num_rows(), 1);
     assert_eq!(result.rows()[0].get_int(0), Some(4));
 }
@@ -324,9 +244,7 @@ fn sum_and_avg() {
     let db = Database::in_memory();
     setup_persons(&db);
 
-    let result = db
-        .query("MATCH (n:Person) RETURN sum(n.age), avg(n.age)")
-        .unwrap();
+    let result = db.query("MATCH (n:Person) RETURN sum(n.age), avg(n.age)").unwrap();
     assert_eq!(result.num_rows(), 1);
     // sum = 30 + 25 + 35 + 28 = 118
     assert_eq!(result.rows()[0].get_int(0), Some(118));
@@ -339,9 +257,7 @@ fn min_and_max() {
     let db = Database::in_memory();
     setup_persons(&db);
 
-    let result = db
-        .query("MATCH (n:Person) RETURN min(n.age), max(n.age)")
-        .unwrap();
+    let result = db.query("MATCH (n:Person) RETURN min(n.age), max(n.age)").unwrap();
     assert_eq!(result.num_rows(), 1);
     assert_eq!(result.rows()[0].get_int(0), Some(25));
     assert_eq!(result.rows()[0].get_int(1), Some(35));
@@ -350,24 +266,15 @@ fn min_and_max() {
 #[test]
 fn group_by_with_count() {
     let db = Database::in_memory();
-    db.execute(
-        "CREATE NODE TABLE Person (id INT64, name STRING, city STRING, PRIMARY KEY (id))",
-    )
-    .unwrap();
-    db.execute("CREATE (n:Person {id: 1, name: 'Alice', city: 'NYC'})")
+    db.execute("CREATE NODE TABLE Person (id INT64, name STRING, city STRING, PRIMARY KEY (id))")
         .unwrap();
-    db.execute("CREATE (n:Person {id: 2, name: 'Bob', city: 'LA'})")
-        .unwrap();
-    db.execute("CREATE (n:Person {id: 3, name: 'Charlie', city: 'NYC'})")
-        .unwrap();
-    db.execute("CREATE (n:Person {id: 4, name: 'Diana', city: 'LA'})")
-        .unwrap();
-    db.execute("CREATE (n:Person {id: 5, name: 'Eve', city: 'NYC'})")
-        .unwrap();
+    db.execute("CREATE (n:Person {id: 1, name: 'Alice', city: 'NYC'})").unwrap();
+    db.execute("CREATE (n:Person {id: 2, name: 'Bob', city: 'LA'})").unwrap();
+    db.execute("CREATE (n:Person {id: 3, name: 'Charlie', city: 'NYC'})").unwrap();
+    db.execute("CREATE (n:Person {id: 4, name: 'Diana', city: 'LA'})").unwrap();
+    db.execute("CREATE (n:Person {id: 5, name: 'Eve', city: 'NYC'})").unwrap();
 
-    let result = db
-        .query("MATCH (n:Person) RETURN n.city, count(n)")
-        .unwrap();
+    let result = db.query("MATCH (n:Person) RETURN n.city, count(n)").unwrap();
     assert_eq!(result.num_rows(), 2);
 
     // Find which row is NYC and which is LA
@@ -386,16 +293,11 @@ fn group_by_with_count() {
 #[test]
 fn collect_aggregate() {
     let db = Database::in_memory();
-    db.execute(
-        "CREATE NODE TABLE Person (id INT64, name STRING, PRIMARY KEY (id))",
-    )
-    .unwrap();
+    db.execute("CREATE NODE TABLE Person (id INT64, name STRING, PRIMARY KEY (id))").unwrap();
     db.execute("CREATE (n:Person {id: 1, name: 'Alice'})").unwrap();
     db.execute("CREATE (n:Person {id: 2, name: 'Bob'})").unwrap();
 
-    let result = db
-        .query("MATCH (n:Person) RETURN collect(n.name)")
-        .unwrap();
+    let result = db.query("MATCH (n:Person) RETURN collect(n.name)").unwrap();
     assert_eq!(result.num_rows(), 1);
     // The result should be a list
     let val = &result.rows()[0].values[0];
@@ -412,10 +314,8 @@ fn collect_aggregate() {
 #[test]
 fn optional_match_with_no_relationship() {
     let db = Database::in_memory();
-    db.execute("CREATE NODE TABLE Person (id INT64, name STRING, PRIMARY KEY (id))")
-        .unwrap();
-    db.execute("CREATE REL TABLE Knows (FROM Person TO Person)")
-        .unwrap();
+    db.execute("CREATE NODE TABLE Person (id INT64, name STRING, PRIMARY KEY (id))").unwrap();
+    db.execute("CREATE REL TABLE Knows (FROM Person TO Person)").unwrap();
     db.execute("CREATE (n:Person {id: 1, name: 'Alice'})").unwrap();
     db.execute("CREATE (n:Person {id: 2, name: 'Bob'})").unwrap();
     // Only Alice knows Bob, not vice versa
@@ -438,8 +338,7 @@ fn optional_match_with_no_relationship() {
 #[test]
 fn union_all_combines_results() {
     let db = Database::in_memory();
-    db.execute("CREATE NODE TABLE Person (id INT64, name STRING, PRIMARY KEY (id))")
-        .unwrap();
+    db.execute("CREATE NODE TABLE Person (id INT64, name STRING, PRIMARY KEY (id))").unwrap();
     db.execute("CREATE (n:Person {id: 1, name: 'Alice'})").unwrap();
     db.execute("CREATE (n:Person {id: 2, name: 'Bob'})").unwrap();
 
@@ -453,14 +352,12 @@ fn union_all_combines_results() {
 #[test]
 fn union_distinct_deduplicates() {
     let db = Database::in_memory();
-    db.execute("CREATE NODE TABLE Person (id INT64, name STRING, PRIMARY KEY (id))")
-        .unwrap();
+    db.execute("CREATE NODE TABLE Person (id INT64, name STRING, PRIMARY KEY (id))").unwrap();
     db.execute("CREATE (n:Person {id: 1, name: 'Alice'})").unwrap();
     db.execute("CREATE (n:Person {id: 2, name: 'Bob'})").unwrap();
 
-    let result = db
-        .query("MATCH (a:Person) RETURN a.name UNION MATCH (b:Person) RETURN b.name")
-        .unwrap();
+    let result =
+        db.query("MATCH (a:Person) RETURN a.name UNION MATCH (b:Person) RETURN b.name").unwrap();
     // Deduplicated: 2 unique names
     assert_eq!(result.num_rows(), 2);
 }
@@ -481,8 +378,7 @@ fn merge_creates_when_not_exists() {
     db.execute("CREATE NODE TABLE Person (id INT64, name STRING, age INT64, PRIMARY KEY (id))")
         .unwrap();
 
-    db.execute("MERGE (n:Person {id: 1, name: 'Alice'}) ON CREATE SET n.age = 25")
-        .unwrap();
+    db.execute("MERGE (n:Person {id: 1, name: 'Alice'}) ON CREATE SET n.age = 25").unwrap();
 
     let result = db.query("MATCH (n:Person) RETURN n.name, n.age").unwrap();
     assert_eq!(result.num_rows(), 1);
@@ -497,8 +393,7 @@ fn merge_matches_when_exists() {
         .unwrap();
     db.execute("CREATE (n:Person {id: 1, name: 'Alice', age: 25})").unwrap();
 
-    db.execute("MERGE (n:Person {id: 1, name: 'Alice'}) ON MATCH SET n.age = 30")
-        .unwrap();
+    db.execute("MERGE (n:Person {id: 1, name: 'Alice'}) ON MATCH SET n.age = 30").unwrap();
 
     let result = db.query("MATCH (n:Person) RETURN n.name, n.age").unwrap();
     assert_eq!(result.num_rows(), 1);
@@ -509,8 +404,7 @@ fn merge_matches_when_exists() {
 #[test]
 fn serial_auto_increment() {
     let db = Database::in_memory();
-    db.execute("CREATE NODE TABLE Person (id SERIAL, name STRING, PRIMARY KEY (id))")
-        .unwrap();
+    db.execute("CREATE NODE TABLE Person (id SERIAL, name STRING, PRIMARY KEY (id))").unwrap();
 
     db.execute("CREATE (n:Person {name: 'Alice'})").unwrap();
     db.execute("CREATE (n:Person {name: 'Bob'})").unwrap();
@@ -529,8 +423,7 @@ fn serial_auto_increment() {
 #[test]
 fn serial_with_explicit_value() {
     let db = Database::in_memory();
-    db.execute("CREATE NODE TABLE Person (id SERIAL, name STRING, PRIMARY KEY (id))")
-        .unwrap();
+    db.execute("CREATE NODE TABLE Person (id SERIAL, name STRING, PRIMARY KEY (id))").unwrap();
 
     // Explicitly provide id — should use the provided value
     db.execute("CREATE (n:Person {id: 100, name: 'Alice'})").unwrap();
@@ -549,8 +442,7 @@ fn serial_with_explicit_value() {
 #[test]
 fn alter_table_add_column() {
     let db = Database::in_memory();
-    db.execute("CREATE NODE TABLE Person (id INT64, name STRING, PRIMARY KEY (id))")
-        .unwrap();
+    db.execute("CREATE NODE TABLE Person (id INT64, name STRING, PRIMARY KEY (id))").unwrap();
     db.execute("CREATE (n:Person {id: 1, name: 'Alice'})").unwrap();
 
     // Add a new column
@@ -584,8 +476,7 @@ fn alter_table_drop_column() {
 #[test]
 fn alter_table_rename_table() {
     let db = Database::in_memory();
-    db.execute("CREATE NODE TABLE Person (id INT64, name STRING, PRIMARY KEY (id))")
-        .unwrap();
+    db.execute("CREATE NODE TABLE Person (id INT64, name STRING, PRIMARY KEY (id))").unwrap();
     db.execute("CREATE (n:Person {id: 1, name: 'Alice'})").unwrap();
 
     db.execute("ALTER TABLE Person RENAME TO People").unwrap();
@@ -603,8 +494,7 @@ fn alter_table_rename_table() {
 #[test]
 fn alter_table_rename_column() {
     let db = Database::in_memory();
-    db.execute("CREATE NODE TABLE Person (id INT64, name STRING, PRIMARY KEY (id))")
-        .unwrap();
+    db.execute("CREATE NODE TABLE Person (id INT64, name STRING, PRIMARY KEY (id))").unwrap();
     db.execute("CREATE (n:Person {id: 1, name: 'Alice'})").unwrap();
 
     db.execute("ALTER TABLE Person RENAME COLUMN name TO fullname").unwrap();
@@ -618,8 +508,7 @@ fn alter_table_rename_column() {
 #[test]
 fn alter_table_drop_pk_column_fails() {
     let db = Database::in_memory();
-    db.execute("CREATE NODE TABLE Person (id INT64, name STRING, PRIMARY KEY (id))")
-        .unwrap();
+    db.execute("CREATE NODE TABLE Person (id INT64, name STRING, PRIMARY KEY (id))").unwrap();
 
     let result = db.execute("ALTER TABLE Person DROP COLUMN id");
     assert!(result.is_err());
@@ -667,8 +556,7 @@ fn copy_to_csv_table() {
     let csv_path = dir.join("export.csv");
 
     let db = Database::in_memory();
-    db.execute("CREATE NODE TABLE Person (id INT64, name STRING, PRIMARY KEY (id))")
-        .unwrap();
+    db.execute("CREATE NODE TABLE Person (id INT64, name STRING, PRIMARY KEY (id))").unwrap();
     db.execute("CREATE (n:Person {id: 1, name: 'Alice'})").unwrap();
     db.execute("CREATE (n:Person {id: 2, name: 'Bob'})").unwrap();
 
@@ -730,8 +618,7 @@ fn copy_from_tsv() {
     }
 
     let db = Database::in_memory();
-    db.execute("CREATE NODE TABLE Person (id INT64, name STRING, PRIMARY KEY (id))")
-        .unwrap();
+    db.execute("CREATE NODE TABLE Person (id INT64, name STRING, PRIMARY KEY (id))").unwrap();
 
     let tsv_str = tsv_path.to_str().unwrap();
     db.execute(&format!("COPY Person FROM '{}' (DELIMITER '\t')", tsv_str)).unwrap();
@@ -771,10 +658,8 @@ fn prepared_statement_with_params() {
 fn recursive_expand_variable_length() {
     // Build a chain: A -> B -> C -> D
     let db = Database::in_memory();
-    db.execute("CREATE NODE TABLE Person (name STRING, PRIMARY KEY(name))")
-        .unwrap();
-    db.execute("CREATE REL TABLE KNOWS (FROM Person TO Person)")
-        .unwrap();
+    db.execute("CREATE NODE TABLE Person (name STRING, PRIMARY KEY(name))").unwrap();
+    db.execute("CREATE REL TABLE KNOWS (FROM Person TO Person)").unwrap();
     db.execute("CREATE (p:Person {name: 'A'})").unwrap();
     db.execute("CREATE (p:Person {name: 'B'})").unwrap();
     db.execute("CREATE (p:Person {name: 'C'})").unwrap();
@@ -844,8 +729,7 @@ fn recursive_expand_variable_length() {
 #[test]
 fn mvcc_write_invisible_to_concurrent_read() {
     let db = Database::in_memory();
-    db.execute("CREATE NODE TABLE Item (id INT64, val STRING, PRIMARY KEY(id))")
-        .unwrap();
+    db.execute("CREATE NODE TABLE Item (id INT64, val STRING, PRIMARY KEY(id))").unwrap();
     db.execute("CREATE (i:Item {id: 1, val: 'original'})").unwrap();
 
     // Phase 1: verify the row exists
@@ -862,13 +746,12 @@ fn mvcc_write_invisible_to_concurrent_read() {
     db.execute("CREATE (i:Item {id: 2, val: 'new_item'})").unwrap();
 
     // The read transaction should NOT see the new row
-    let engine = Engine::with_snapshot(read_start_ts, HashMap::new());
+    let mut engine = Engine::with_snapshot(read_start_ts, HashMap::new());
     let physical = {
         let catalog = db_inner.catalog.read().unwrap();
         let mut binder = gqlite_core::binder::Binder::new(&catalog);
-        let stmt = gqlite_core::parser::parser::Parser::parse_query(
-            "MATCH (i:Item) RETURN i.val"
-        ).unwrap();
+        let stmt = gqlite_core::parser::parser::Parser::parse_query("MATCH (i:Item) RETURN i.val")
+            .unwrap();
         let bound = binder.bind(&stmt).unwrap();
         let planner = gqlite_core::planner::logical::Planner::new(&catalog);
         let logical = planner.plan(&bound).unwrap();
@@ -889,8 +772,7 @@ fn mvcc_write_invisible_to_concurrent_read() {
 #[test]
 fn mvcc_write_visible_after_commit() {
     let db = Database::in_memory();
-    db.execute("CREATE NODE TABLE Thing (id INT64, name STRING, PRIMARY KEY(id))")
-        .unwrap();
+    db.execute("CREATE NODE TABLE Thing (id INT64, name STRING, PRIMARY KEY(id))").unwrap();
 
     // Before any data insert, read sees nothing
     let r1 = db.execute("MATCH (t:Thing) RETURN t.name").unwrap();
@@ -908,8 +790,7 @@ fn mvcc_write_visible_after_commit() {
 #[test]
 fn mvcc_delete_invisible_to_concurrent_read() {
     let db = Database::in_memory();
-    db.execute("CREATE NODE TABLE Item (id INT64, val STRING, PRIMARY KEY(id))")
-        .unwrap();
+    db.execute("CREATE NODE TABLE Item (id INT64, val STRING, PRIMARY KEY(id))").unwrap();
     db.execute("CREATE (i:Item {id: 1, val: 'keep'})").unwrap();
     db.execute("CREATE (i:Item {id: 2, val: 'delete_me'})").unwrap();
 
@@ -922,13 +803,14 @@ fn mvcc_delete_invisible_to_concurrent_read() {
     db.execute("MATCH (i:Item) WHERE i.id = 2 DELETE i").unwrap();
 
     // The read transaction should still see both rows (delete happened after snapshot)
-    let engine = Engine::with_snapshot(read_start_ts, HashMap::new());
+    let mut engine = Engine::with_snapshot(read_start_ts, HashMap::new());
     let physical = {
         let catalog = db_inner.catalog.read().unwrap();
         let mut binder = gqlite_core::binder::Binder::new(&catalog);
         let stmt = gqlite_core::parser::parser::Parser::parse_query(
-            "MATCH (i:Item) RETURN i.val ORDER BY i.val"
-        ).unwrap();
+            "MATCH (i:Item) RETURN i.val ORDER BY i.val",
+        )
+        .unwrap();
         let bound = binder.bind(&stmt).unwrap();
         let planner = gqlite_core::planner::logical::Planner::new(&catalog);
         let logical = planner.plan(&bound).unwrap();
@@ -948,8 +830,7 @@ fn mvcc_delete_invisible_to_concurrent_read() {
 #[test]
 fn mvcc_gc_old_versions() {
     let db = Database::in_memory();
-    db.execute("CREATE NODE TABLE Item (id INT64, PRIMARY KEY(id))")
-        .unwrap();
+    db.execute("CREATE NODE TABLE Item (id INT64, PRIMARY KEY(id))").unwrap();
     db.execute("CREATE (i:Item {id: 1})").unwrap();
     db.execute("CREATE (i:Item {id: 2})").unwrap();
 

@@ -64,9 +64,6 @@ fn collect() {
     acc.accumulate(&Value::String("b".into()));
     assert_eq!(
         acc.finalize(),
-        Value::List(vec![
-            Value::String("a".into()),
-            Value::String("b".into()),
-        ])
+        Value::List(vec![Value::String("a".into()), Value::String("b".into()),])
     );
 }

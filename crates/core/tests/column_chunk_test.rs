@@ -40,6 +40,7 @@ fn bool_column() {
 }
 
 #[test]
+#[allow(clippy::approx_constant)]
 fn double_column() {
     let mut chunk = ColumnChunk::with_default_capacity(DataType::Double);
     chunk.append(&Value::Float(3.14)).unwrap();
@@ -119,8 +120,7 @@ fn flush_and_load_int64() {
     let meta = chunk.flush_to_disk(&mut pager).unwrap();
     pager.sync().unwrap();
 
-    let loaded =
-        ColumnChunk::load_from_disk(&pager, &meta, DataType::Int64).unwrap();
+    let loaded = ColumnChunk::load_from_disk(&pager, &meta, DataType::Int64).unwrap();
     assert_eq!(loaded.len(), 51);
     for i in 0..50 {
         assert_eq!(loaded.get_value(i), Value::Int(i as i64 * 10));
@@ -146,8 +146,7 @@ fn flush_and_load_string() {
     let meta = chunk.flush_to_disk(&mut pager).unwrap();
     pager.sync().unwrap();
 
-    let loaded =
-        ColumnChunk::load_from_disk(&pager, &meta, DataType::String).unwrap();
+    let loaded = ColumnChunk::load_from_disk(&pager, &meta, DataType::String).unwrap();
     assert_eq!(loaded.len(), 3);
     assert_eq!(loaded.get_value(0), Value::String("hello".into()));
     assert!(loaded.is_null(1));

@@ -1,6 +1,6 @@
 [package]
 name = "gqlite-core"
-version = "0.1.0"
+version = "0.1.0-beta.1"
 description = "Core library for gqlite — a lightweight embeddable graph database"
 edition.workspace = true
 rust-version.workspace = true
@@ -19,3 +19,12 @@ crc32fast = { workspace = true }
 rayon = { workspace = true }
 regex = { workspace = true }
 chrono = { workspace = true }
+fs2 = { workspace = true }
+log = { workspace = true }
+
+[dev-dependencies]
+criterion = { workspace = true }
+
+[[bench]]
+name = "query_bench"
+harness = false

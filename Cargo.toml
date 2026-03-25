@@ -1,10 +1,11 @@
 [workspace]
-members = ["crates/core", "crates/cli", "crates/parser"]
+members = ["crates/core", "crates/cli", "crates/parser", "crates/gui/src-tauri"]
+exclude = ["crates/parser/fuzz"]
 resolver = "2"
 
 [workspace.package]
 edition = "2021"
-rust-version = "1.70"
+rust-version = "1.89"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/coderjinhui/gqlite"
 
@@ -21,5 +22,8 @@ crc32fast = "1"
 rayon = "1"
 regex = "1"
 chrono = { version = "0.4", features = ["serde"] }
-gqlite-core = { path = "crates/core" }
-gqlite-parser = { path = "crates/parser" }
+criterion = { version = "0.5", features = ["html_reports"] }
+fs2 = "0.4"
+log = "0.4"
+gqlite-core = { path = "crates/core", version = "0.1.0-beta.1" }
+gqlite-parser = { path = "crates/parser", version = "0.1.0-beta.1" }

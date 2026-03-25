@@ -5,9 +5,9 @@ use std::collections::HashMap;
 use crate::error::GqliteError;
 use crate::types::value::Value;
 
-use super::scalar;
 use super::aggregate;
 use super::datetime;
+use super::scalar;
 
 /// A scalar function: takes a list of values, returns one value.
 pub type ScalarFn = fn(&[Value]) -> Result<Value, GqliteError>;
@@ -19,9 +19,7 @@ pub struct FunctionRegistry {
 
 impl FunctionRegistry {
     pub fn new() -> Self {
-        let mut reg = Self {
-            scalar_fns: HashMap::new(),
-        };
+        let mut reg = Self { scalar_fns: HashMap::new() };
         reg.register_builtins();
         reg
     }
@@ -116,4 +114,3 @@ pub fn create_accumulator(name: &str) -> Option<Box<dyn AggregateAccumulator>> {
         _ => None,
     }
 }
-

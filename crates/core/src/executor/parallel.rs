@@ -21,7 +21,7 @@ impl Engine {
     /// For read-only queries, uses `rayon::join` to run independent branches
     /// (HashJoin build/probe, Union left/right) concurrently.
     pub fn execute_plan_parallel(
-        &self,
+        &mut self,
         plan: &PhysicalPlan,
         db: &Arc<DatabaseInner>,
         txn_id: u64,
@@ -50,7 +50,7 @@ impl Engine {
     /// Recursively evaluate an operator tree, using rayon to parallelise
     /// independent branches where possible.
     fn execute_operator_parallel(
-        &self,
+        &mut self,
         plan: &PhysicalPlan,
         db: &Arc<DatabaseInner>,
         txn_id: u64,
@@ -59,19 +59,28 @@ impl Engine {
             // ── Parallelisable binary operators ──────────────
 
             // HashJoin: build and probe sides are independent — run in parallel.
+            // Create cloned engines for each branch to avoid &mut self borrow issues.
             PhysicalPlan::HashJoin { build, probe, .. } => {
+                let mut build_engine = Engine::with_snapshot(self.start_ts, self.params.clone());
+                build_engine.db = self.db.clone();
+                let mut probe_engine = Engine::with_snapshot(self.start_ts, self.params.clone());
+                probe_engine.db = self.db.clone();
                 let (build_result, probe_result) = rayon::join(
-                    || self.execute_operator_parallel(build, db, txn_id),
-                    || self.execute_operator_parallel(probe, db, txn_id),
+                    || build_engine.execute_operator_parallel(build, db, txn_id),
+                    || probe_engine.execute_operator_parallel(probe, db, txn_id),
                 );
                 self.exec_cross_join(build_result?, probe_result?)
             }
 
             // Union: both sides are independent — run in parallel.
             PhysicalPlan::Union { left, right, all } => {
+                let mut left_engine = Engine::with_snapshot(self.start_ts, self.params.clone());
+                left_engine.db = self.db.clone();
+                let mut right_engine = Engine::with_snapshot(self.start_ts, self.params.clone());
+                right_engine.db = self.db.clone();
                 let (left_result, right_result) = rayon::join(
-                    || self.execute_operator_parallel(left, db, txn_id),
-                    || self.execute_operator_parallel(right, db, txn_id),
+                    || left_engine.execute_operator_parallel(left, db, txn_id),
+                    || right_engine.execute_operator_parallel(right, db, txn_id),
                 );
                 self.exec_union(left_result?, right_result?, *all)
             }
@@ -79,7 +88,6 @@ impl Engine {
             // ── Streaming operators with single child ────────
             // Recurse in parallel mode for the child, then apply
             // the current operator sequentially.
-
             PhysicalPlan::Filter { input, predicate } => {
                 let input_result = self.execute_operator_parallel(input, db, txn_id)?;
                 self.exec_filter(input_result, predicate)
@@ -90,9 +98,7 @@ impl Engine {
                 self.exec_projection(input_result, expressions)
             }
 
-            PhysicalPlan::ReturnAll { input } => {
-                self.execute_operator_parallel(input, db, txn_id)
-            }
+            PhysicalPlan::ReturnAll { input } => self.execute_operator_parallel(input, db, txn_id),
 
             PhysicalPlan::OrderBy { input, items } => {
                 let input_result = self.execute_operator_parallel(input, db, txn_id)?;
@@ -181,4 +187,3 @@ impl Engine {
         }
     }
 }
-

@@ -3,16 +3,14 @@ use gqlite_core::Database;
 /// Helper: create an in-memory DB with a self-referencing node/rel schema.
 fn setup_db() -> Database {
     let db = Database::in_memory();
-    db.execute("CREATE NODE TABLE N(id INT64, PRIMARY KEY(id))")
-        .unwrap();
+    db.execute("CREATE NODE TABLE N(id INT64, PRIMARY KEY(id))").unwrap();
     db.execute("CREATE REL TABLE E(FROM N TO N)").unwrap();
     db
 }
 
 /// Helper: create a node with the given id.
 fn create_node(db: &Database, id: i64) {
-    db.execute(&format!("CREATE (n:N {{id: {}}})", id))
-        .unwrap();
+    db.execute(&format!("CREATE (n:N {{id: {}}})", id)).unwrap();
 }
 
 /// Helper: create an edge from src to dst.
@@ -35,20 +33,13 @@ fn triangle_count_single_triangle() {
     create_edge(&db, 2, 3);
     create_edge(&db, 1, 3);
 
-    let result = db
-        .query("CALL triangle_count('E') YIELD node_id, triangles")
-        .unwrap();
+    let result = db.query("CALL triangle_count('E') YIELD node_id, triangles").unwrap();
     assert_eq!(result.num_rows(), 3);
 
     // Each node participates in exactly 1 triangle
     for row in result.rows() {
         let tri = row.get_int(1).unwrap();
-        assert_eq!(
-            tri, 1,
-            "node {} should have 1 triangle, got {}",
-            row.get_int(0).unwrap(),
-            tri
-        );
+        assert_eq!(tri, 1, "node {} should have 1 triangle, got {}", row.get_int(0).unwrap(), tri);
     }
 }
 
@@ -62,15 +53,14 @@ fn triangle_count_no_triangles() {
     create_edge(&db, 1, 2);
     create_edge(&db, 2, 3);
 
-    let result = db
-        .query("CALL triangle_count('E') YIELD node_id, triangles")
-        .unwrap();
+    let result = db.query("CALL triangle_count('E') YIELD node_id, triangles").unwrap();
     assert_eq!(result.num_rows(), 3);
 
     for row in result.rows() {
         let tri = row.get_int(1).unwrap();
         assert_eq!(
-            tri, 0,
+            tri,
+            0,
             "node {} should have 0 triangles in a chain, got {}",
             row.get_int(0).unwrap(),
             tri
@@ -91,15 +81,14 @@ fn triangle_count_star_graph() {
     create_edge(&db, 1, 3);
     create_edge(&db, 1, 4);
 
-    let result = db
-        .query("CALL triangle_count('E') YIELD node_id, triangles")
-        .unwrap();
+    let result = db.query("CALL triangle_count('E') YIELD node_id, triangles").unwrap();
     assert_eq!(result.num_rows(), 4);
 
     for row in result.rows() {
         let tri = row.get_int(1).unwrap();
         assert_eq!(
-            tri, 0,
+            tri,
+            0,
             "node {} should have 0 triangles in a star, got {}",
             row.get_int(0).unwrap(),
             tri
@@ -125,16 +114,15 @@ fn triangle_count_complete_k4() {
     create_edge(&db, 2, 4);
     create_edge(&db, 3, 4);
 
-    let result = db
-        .query("CALL triangle_count('E') YIELD node_id, triangles")
-        .unwrap();
+    let result = db.query("CALL triangle_count('E') YIELD node_id, triangles").unwrap();
     assert_eq!(result.num_rows(), 4);
 
     // Each node participates in exactly 3 triangles
     for row in result.rows() {
         let tri = row.get_int(1).unwrap();
         assert_eq!(
-            tri, 3,
+            tri,
+            3,
             "node {} in K4 should have 3 triangles, got {}",
             row.get_int(0).unwrap(),
             tri

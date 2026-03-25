@@ -10,19 +10,19 @@ pub struct CountAccumulator {
     count_star: bool,
 }
 
+impl Default for CountAccumulator {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl CountAccumulator {
     pub fn new() -> Self {
-        Self {
-            count: 0,
-            count_star: false,
-        }
+        Self { count: 0, count_star: false }
     }
 
     pub fn new_star() -> Self {
-        Self {
-            count: 0,
-            count_star: true,
-        }
+        Self { count: 0, count_star: true }
     }
 }
 
@@ -51,14 +51,15 @@ pub struct SumAccumulator {
     has_value: bool,
 }
 
+impl Default for SumAccumulator {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SumAccumulator {
     pub fn new() -> Self {
-        Self {
-            sum_int: 0,
-            sum_float: 0.0,
-            has_float: false,
-            has_value: false,
-        }
+        Self { sum_int: 0, sum_float: 0.0, has_float: false, has_value: false }
     }
 }
 
@@ -105,6 +106,12 @@ pub struct AvgAccumulator {
     count: i64,
 }
 
+impl Default for AvgAccumulator {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl AvgAccumulator {
     pub fn new() -> Self {
         Self { sum: 0.0, count: 0 }
@@ -146,6 +153,12 @@ pub struct MinAccumulator {
     min: Option<Value>,
 }
 
+impl Default for MinAccumulator {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl MinAccumulator {
     pub fn new() -> Self {
         Self { min: None }
@@ -182,6 +195,12 @@ impl AggregateAccumulator for MinAccumulator {
 
 pub struct MaxAccumulator {
     max: Option<Value>,
+}
+
+impl Default for MaxAccumulator {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl MaxAccumulator {
@@ -222,6 +241,12 @@ pub struct CollectAccumulator {
     values: Vec<Value>,
 }
 
+impl Default for CollectAccumulator {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl CollectAccumulator {
     pub fn new() -> Self {
         Self { values: Vec::new() }
@@ -255,4 +280,3 @@ fn value_lt(a: &Value, b: &Value) -> bool {
         _ => false,
     }
 }
-

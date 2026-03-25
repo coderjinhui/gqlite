@@ -4,12 +4,35 @@
 //! Dirty pages are flushed back to disk when evicted or on explicit flush.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::error::GqliteError;
 use crate::storage::pager::{PageId, Pager};
 
 /// Default number of page frames in the buffer pool.
 const DEFAULT_POOL_SIZE: usize = 256;
+
+/// Statistics for the buffer pool.
+#[derive(Debug, Default)]
+pub struct BufferPoolStats {
+    pub hits: AtomicU64,
+    pub misses: AtomicU64,
+    pub evictions: AtomicU64,
+    pub flushes: AtomicU64,
+}
+
+impl BufferPoolStats {
+    pub fn hit_rate(&self) -> f64 {
+        let hits = self.hits.load(Ordering::Relaxed);
+        let misses = self.misses.load(Ordering::Relaxed);
+        let total = hits + misses;
+        if total == 0 {
+            0.0
+        } else {
+            hits as f64 / total as f64
+        }
+    }
+}
 
 /// A frame in the buffer pool holding one page's data.
 pub struct Frame {
@@ -27,6 +50,7 @@ pub struct BufferPool {
     max_frames: usize,
     access_counter: u64,
     page_size: usize,
+    pub stats: BufferPoolStats,
 }
 
 impl BufferPool {
@@ -44,6 +68,7 @@ impl BufferPool {
             max_frames,
             access_counter: 0,
             page_size,
+            stats: BufferPoolStats::default(),
         }
     }
 
@@ -54,26 +79,20 @@ impl BufferPool {
 
         if self.frames.contains_key(&page_id) {
             // Cache hit — update LRU counter
+            self.stats.hits.fetch_add(1, Ordering::Relaxed);
             let frame = self.frames.get_mut(&page_id).unwrap();
             frame.last_access = counter;
             return Ok(&self.frames[&page_id].data);
         }
 
         // Cache miss — evict if full, then load from disk
+        self.stats.misses.fetch_add(1, Ordering::Relaxed);
         self.ensure_space()?;
 
         let mut data = vec![0u8; self.page_size];
         self.pager.read_page(page_id, &mut data)?;
 
-        self.frames.insert(
-            page_id,
-            Frame {
-                page_id,
-                data,
-                dirty: false,
-                last_access: counter,
-            },
-        );
+        self.frames.insert(page_id, Frame { page_id, data, dirty: false, last_access: counter });
 
         Ok(&self.frames[&page_id].data)
     }
@@ -99,12 +118,7 @@ impl BufferPool {
             self.ensure_space()?;
             self.frames.insert(
                 page_id,
-                Frame {
-                    page_id,
-                    data: data.to_vec(),
-                    dirty: true,
-                    last_access: counter,
-                },
+                Frame { page_id, data: data.to_vec(), dirty: true, last_access: counter },
             );
         }
 
@@ -113,18 +127,15 @@ impl BufferPool {
 
     /// Flush all dirty pages to disk.
     pub fn flush_all(&mut self) -> Result<(), GqliteError> {
-        let dirty_ids: Vec<PageId> = self
-            .frames
-            .iter()
-            .filter(|(_, f)| f.dirty)
-            .map(|(id, _)| *id)
-            .collect();
+        let dirty_ids: Vec<PageId> =
+            self.frames.iter().filter(|(_, f)| f.dirty).map(|(id, _)| *id).collect();
 
-        for page_id in dirty_ids {
-            let frame = self.frames.get_mut(&page_id).unwrap();
-            self.pager.write_page(page_id, &frame.data)?;
+        for page_id in &dirty_ids {
+            let frame = self.frames.get_mut(page_id).unwrap();
+            self.pager.write_page(*page_id, &frame.data)?;
             frame.dirty = false;
         }
+        self.stats.flushes.fetch_add(dirty_ids.len() as u64, Ordering::Relaxed);
 
         self.pager.sync()?;
         Ok(())
@@ -175,20 +186,55 @@ impl BufferPool {
         }
 
         // Find the least recently used frame
-        let lru_id = self
-            .frames
-            .iter()
-            .min_by_key(|(_, f)| f.last_access)
-            .map(|(id, _)| *id)
-            .unwrap();
+        let lru_id =
+            self.frames.iter().min_by_key(|(_, f)| f.last_access).map(|(id, _)| *id).unwrap();
 
         // Flush if dirty
         let frame = self.frames.get(&lru_id).unwrap();
         if frame.dirty {
             self.pager.write_page(frame.page_id, &frame.data)?;
+            self.stats.flushes.fetch_add(1, Ordering::Relaxed);
         }
 
         self.frames.remove(&lru_id);
+        self.stats.evictions.fetch_add(1, Ordering::Relaxed);
         Ok(())
+    }
+
+    // ── Pager delegation ────────────────────────────────────────
+
+    /// Allocate a new page (delegates to underlying pager).
+    pub fn allocate_page(&mut self) -> Result<PageId, GqliteError> {
+        self.pager.allocate_page()
+    }
+
+    /// Returns the page size in bytes.
+    pub fn page_size(&self) -> u32 {
+        self.pager.page_size()
+    }
+
+    /// Returns the number of pages.
+    pub fn page_count(&self) -> u64 {
+        self.pager.page_count()
+    }
+
+    /// Returns a reference to the file header.
+    pub fn header(&self) -> &crate::storage::format::FileHeader {
+        self.pager.header()
+    }
+
+    /// Returns a mutable reference to the file header.
+    pub fn header_mut(&mut self) -> &mut crate::storage::format::FileHeader {
+        self.pager.header_mut()
+    }
+
+    /// Write the in-memory header back to page 0.
+    pub fn flush_header(&self) -> Result<(), GqliteError> {
+        self.pager.flush_header()
+    }
+
+    /// Flush all OS-level buffers to disk.
+    pub fn sync(&self) -> Result<(), GqliteError> {
+        self.pager.sync()
     }
 }

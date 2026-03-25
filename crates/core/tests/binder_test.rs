@@ -31,9 +31,7 @@ fn test_catalog() -> Catalog {
             "id",
         )
         .unwrap();
-    catalog
-        .create_rel_table("KNOWS", "Person", "Person", vec![])
-        .unwrap();
+    catalog.create_rel_table("KNOWS", "Person", "Person", vec![]).unwrap();
     catalog
 }
 
@@ -65,8 +63,7 @@ fn bind_undefined_variable() {
 #[test]
 fn bind_relationship() {
     let catalog = test_catalog();
-    let stmt =
-        Parser::parse_query("MATCH (a:Person)-[r:KNOWS]->(b:Person) RETURN a, b").unwrap();
+    let stmt = Parser::parse_query("MATCH (a:Person)-[r:KNOWS]->(b:Person) RETURN a, b").unwrap();
     let mut binder = Binder::new(&catalog);
     let bound = binder.bind(&stmt).unwrap();
     assert!(matches!(bound, BoundStatement::Query(_)));
@@ -75,8 +72,7 @@ fn bind_relationship() {
 #[test]
 fn bind_unknown_rel_table() {
     let catalog = test_catalog();
-    let stmt =
-        Parser::parse_query("MATCH (a:Person)-[r:LIKES]->(b:Person) RETURN a").unwrap();
+    let stmt = Parser::parse_query("MATCH (a:Person)-[r:LIKES]->(b:Person) RETURN a").unwrap();
     let mut binder = Binder::new(&catalog);
     assert!(binder.bind(&stmt).is_err());
 }
@@ -84,10 +80,9 @@ fn bind_unknown_rel_table() {
 #[test]
 fn bind_ddl_create_node_table() {
     let catalog = Catalog::new();
-    let stmt = Parser::parse_query(
-        "CREATE NODE TABLE Movie (id INT64, title STRING, PRIMARY KEY (id))",
-    )
-    .unwrap();
+    let stmt =
+        Parser::parse_query("CREATE NODE TABLE Movie (id INT64, title STRING, PRIMARY KEY (id))")
+            .unwrap();
     let mut binder = Binder::new(&catalog);
     let bound = binder.bind(&stmt).unwrap();
     assert!(matches!(bound, BoundStatement::CreateNodeTable { .. }));
@@ -96,10 +91,8 @@ fn bind_ddl_create_node_table() {
 #[test]
 fn bind_ddl_bad_pk() {
     let catalog = Catalog::new();
-    let stmt = Parser::parse_query(
-        "CREATE NODE TABLE Movie (id INT64, PRIMARY KEY (nonexistent))",
-    )
-    .unwrap();
+    let stmt = Parser::parse_query("CREATE NODE TABLE Movie (id INT64, PRIMARY KEY (nonexistent))")
+        .unwrap();
     let mut binder = Binder::new(&catalog);
     assert!(binder.bind(&stmt).is_err());
 }

@@ -13,9 +13,7 @@ pub struct ProcedureRegistry {
 impl ProcedureRegistry {
     /// Create a new registry with all built-in procedures pre-registered.
     pub fn new() -> Self {
-        let mut reg = ProcedureRegistry {
-            procedures: HashMap::new(),
-        };
+        let mut reg = ProcedureRegistry { procedures: HashMap::new() };
         // Register built-in procedures
         reg.register(Box::new(DbmsTables));
         reg.register(Box::new(super::graph_algo::DegreeCentrality));
@@ -69,16 +67,10 @@ impl Procedure for DbmsTables {
         let catalog = db.catalog.read().unwrap();
         let mut rows = Vec::new();
         for table in catalog.node_tables() {
-            rows.push(vec![
-                Value::String(table.name.clone()),
-                Value::String("NODE".to_string()),
-            ]);
+            rows.push(vec![Value::String(table.name.clone()), Value::String("NODE".to_string())]);
         }
         for table in catalog.rel_tables() {
-            rows.push(vec![
-                Value::String(table.name.clone()),
-                Value::String("REL".to_string()),
-            ]);
+            rows.push(vec![Value::String(table.name.clone()), Value::String("REL".to_string())]);
         }
         Ok(rows)
     }

@@ -38,18 +38,8 @@ fn insert_and_compact() {
     assert_eq!(csr.get_neighbor_count(0), 1);
 
     // Insert pending edge
-    csr.insert_edge(PendingEdge {
-        src_offset: 0,
-        dst_offset: 2,
-        rel_id: 200,
-        properties: vec![],
-    });
-    csr.insert_edge(PendingEdge {
-        src_offset: 1,
-        dst_offset: 2,
-        rel_id: 201,
-        properties: vec![],
-    });
+    csr.insert_edge(PendingEdge { src_offset: 0, dst_offset: 2, rel_id: 200, properties: vec![] });
+    csr.insert_edge(PendingEdge { src_offset: 1, dst_offset: 2, rel_id: 201, properties: vec![] });
 
     // Before compact, main CSR unchanged
     assert_eq!(csr.get_neighbor_count(0), 1);

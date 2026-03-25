@@ -33,9 +33,7 @@ pub fn fn_length(args: &[Value]) -> Result<Value, GqliteError> {
         Some(Value::List(l)) => {
             // If the list looks like a path (all InternalId), return number of
             // edges (len - 1).  Otherwise return list length.
-            let is_path = !l.is_empty()
-                && l.iter()
-                    .all(|v| matches!(v, Value::InternalId(_)));
+            let is_path = !l.is_empty() && l.iter().all(|v| matches!(v, Value::InternalId(_)));
             if is_path {
                 Ok(Value::Int((l.len() as i64) - 1))
             } else {
@@ -90,9 +88,7 @@ pub fn fn_ends_with(args: &[Value]) -> Result<Value, GqliteError> {
         return Err(GqliteError::Execution("ends_with() expects 2 arguments".into()));
     }
     match (&args[0], &args[1]) {
-        (Value::String(s), Value::String(suffix)) => {
-            Ok(Value::Bool(s.ends_with(suffix.as_str())))
-        }
+        (Value::String(s), Value::String(suffix)) => Ok(Value::Bool(s.ends_with(suffix.as_str()))),
         (Value::Null, _) | (_, Value::Null) => Ok(Value::Null),
         _ => Err(GqliteError::Execution("ends_with() expects strings".into())),
     }
@@ -208,7 +204,7 @@ pub fn fn_right(args: &[Value]) -> Result<Value, GqliteError> {
         (Value::String(s), Value::Int(n)) => {
             let n = (*n).max(0) as usize;
             let len = s.chars().count();
-            let skip = if n >= len { 0 } else { len - n };
+            let skip = len.saturating_sub(n);
             Ok(Value::String(s.chars().skip(skip).collect()))
         }
         (Value::Null, _) | (_, Value::Null) => Ok(Value::Null),
@@ -236,7 +232,7 @@ pub fn fn_lpad(args: &[Value]) -> Result<Value, GqliteError> {
             if len >= width {
                 Ok(Value::String(s.chars().take(width).collect()))
             } else {
-                let padding: String = std::iter::repeat(pad_char).take(width - len).collect();
+                let padding: String = std::iter::repeat_n(pad_char, width - len).collect();
                 Ok(Value::String(format!("{}{}", padding, s)))
             }
         }
@@ -265,7 +261,7 @@ pub fn fn_rpad(args: &[Value]) -> Result<Value, GqliteError> {
             if len >= width {
                 Ok(Value::String(s.chars().take(width).collect()))
             } else {
-                let padding: String = std::iter::repeat(pad_char).take(width - len).collect();
+                let padding: String = std::iter::repeat_n(pad_char, width - len).collect();
                 Ok(Value::String(format!("{}{}", s, padding)))
             }
         }
@@ -411,7 +407,7 @@ pub fn fn_list_sort(args: &[Value]) -> Result<Value, GqliteError> {
     match args.first() {
         Some(Value::List(l)) => {
             let mut new_list = l.clone();
-            new_list.sort_by(|a, b| value_cmp(a, b));
+            new_list.sort_by(value_cmp);
             Ok(Value::List(new_list))
         }
         Some(Value::Null) => Ok(Value::Null),
@@ -556,10 +552,7 @@ pub fn fn_rand(args: &[Value]) -> Result<Value, GqliteError> {
         return Err(GqliteError::Execution("rand() expects no arguments".into()));
     }
     use std::time::{SystemTime, UNIX_EPOCH};
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .subsec_nanos();
+    let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().subsec_nanos();
     Ok(Value::Float(nanos as f64 / 1_000_000_000.0))
 }
 
@@ -583,14 +576,12 @@ pub fn fn_to_integer(args: &[Value]) -> Result<Value, GqliteError> {
         Some(Value::Float(f)) => Ok(Value::Int(*f as i64)),
         Some(Value::String(s)) => match s.parse::<i64>() {
             Ok(i) => Ok(Value::Int(i)),
-            Err(_) => Err(GqliteError::Execution(
-                format!("toInteger() cannot parse '{}' as integer", s),
-            )),
+            Err(_) => {
+                Err(GqliteError::Execution(format!("toInteger() cannot parse '{}' as integer", s)))
+            }
         },
         Some(Value::Null) => Ok(Value::Null),
-        _ => Err(GqliteError::Execution(
-            "toInteger() expects a number or string".into(),
-        )),
+        _ => Err(GqliteError::Execution("toInteger() expects a number or string".into())),
     }
 }
 
@@ -600,14 +591,12 @@ pub fn fn_to_float(args: &[Value]) -> Result<Value, GqliteError> {
         Some(Value::Float(f)) => Ok(Value::Float(*f)),
         Some(Value::String(s)) => match s.parse::<f64>() {
             Ok(f) => Ok(Value::Float(f)),
-            Err(_) => Err(GqliteError::Execution(
-                format!("toFloat() cannot parse '{}' as float", s),
-            )),
+            Err(_) => {
+                Err(GqliteError::Execution(format!("toFloat() cannot parse '{}' as float", s)))
+            }
         },
         Some(Value::Null) => Ok(Value::Null),
-        _ => Err(GqliteError::Execution(
-            "toFloat() expects a number or string".into(),
-        )),
+        _ => Err(GqliteError::Execution("toFloat() expects a number or string".into())),
     }
 }
 
@@ -627,4 +616,3 @@ fn value_cmp(a: &Value, b: &Value) -> std::cmp::Ordering {
         _ => Ordering::Equal,
     }
 }
-

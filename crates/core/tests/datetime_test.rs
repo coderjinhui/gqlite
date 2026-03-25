@@ -1,6 +1,6 @@
-use gqlite_core::Database;
 use gqlite_core::functions::datetime::*;
 use gqlite_core::types::value::Value;
+use gqlite_core::Database;
 
 #[test]
 fn datetime_date_parse() {

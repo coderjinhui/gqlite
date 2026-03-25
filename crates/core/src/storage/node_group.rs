@@ -17,15 +17,9 @@ pub struct ChunkedNodeGroup {
 
 impl ChunkedNodeGroup {
     pub fn new(data_types: &[DataType]) -> Self {
-        let columns = data_types
-            .iter()
-            .map(|dt| ColumnChunk::with_default_capacity(dt.clone()))
-            .collect();
-        Self {
-            columns,
-            num_rows: 0,
-            capacity: CHUNK_CAPACITY as u64,
-        }
+        let columns =
+            data_types.iter().map(|dt| ColumnChunk::with_default_capacity(dt.clone())).collect();
+        Self { columns, num_rows: 0, capacity: CHUNK_CAPACITY as u64 }
     }
 
     /// Append a row (one value per column). Returns the row index within this chunk.
@@ -109,12 +103,7 @@ pub struct NodeGroup {
 
 impl NodeGroup {
     pub fn new(group_idx: u32, data_types: Vec<DataType>) -> Self {
-        Self {
-            group_idx,
-            chunks: Vec::new(),
-            data_types,
-            num_rows: 0,
-        }
+        Self { group_idx, chunks: Vec::new(), data_types, num_rows: 0 }
     }
 
     /// Given a global row offset, compute (group_idx, offset_in_group).

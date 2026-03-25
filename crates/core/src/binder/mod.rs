@@ -47,10 +47,7 @@ pub struct Binder<'a> {
 
 impl<'a> Binder<'a> {
     pub fn new(catalog: &'a Catalog) -> Self {
-        Self {
-            catalog,
-            scope: BindingScope::default(),
-        }
+        Self { catalog, scope: BindingScope::default() }
     }
 
     /// Bind a statement, performing semantic validation.
@@ -59,9 +56,7 @@ impl<'a> Binder<'a> {
             Statement::Query(q) => self.bind_query(q),
             Statement::CreateNodeTable(s) => self.bind_create_node_table(s),
             Statement::CreateRelTable(s) => self.bind_create_rel_table(s),
-            Statement::DropTable(s) => Ok(BoundStatement::DropTable {
-                name: s.name.clone(),
-            }),
+            Statement::DropTable(s) => Ok(BoundStatement::DropTable { name: s.name.clone() }),
             Statement::AlterTable(s) => Ok(BoundStatement::AlterTable {
                 table_name: s.table_name.clone(),
                 action: s.action.clone(),
@@ -99,8 +94,13 @@ impl<'a> Binder<'a> {
             Statement::Call { .. } => {
                 // CALL statements are handled directly in Connection::execute_with_params,
                 // they should never reach the binder.
+                Err(GqliteError::Parse("CALL statements should be handled before binding".into()))
+            }
+            Statement::Begin | Statement::Commit | Statement::Rollback | Statement::Explain(_) => {
+                // Transaction control statements are handled directly in Connection,
+                // they should never reach the binder.
                 Err(GqliteError::Parse(
-                    "CALL statements should be handled before binding".into(),
+                    "transaction control statements should be handled before binding".into(),
                 ))
             }
         }
@@ -186,10 +186,8 @@ impl<'a> Binder<'a> {
                         table_id: None,
                         var_type: BoundVarType::Node { label: None },
                     });
-                    bound_clauses.push(BoundClause::Unwind {
-                        expr: u.expr.clone(),
-                        alias: u.alias.clone(),
-                    });
+                    bound_clauses
+                        .push(BoundClause::Unwind { expr: u.expr.clone(), alias: u.alias.clone() });
                 }
                 Clause::Merge(m) => {
                     self.bind_match_pattern(&m.pattern)?;
@@ -231,9 +229,7 @@ impl<'a> Binder<'a> {
             }
         }
 
-        Ok(BoundStatement::Query(BoundQuery {
-            clauses: bound_clauses,
-        }))
+        Ok(BoundStatement::Query(BoundQuery { clauses: bound_clauses }))
     }
 
     fn bind_match_pattern(&mut self, pattern: &GraphPattern) -> Result<(), GqliteError> {
@@ -260,9 +256,7 @@ impl<'a> Binder<'a> {
                             self.scope.define(BoundVariable {
                                 name: alias.clone(),
                                 table_id,
-                                var_type: BoundVarType::Node {
-                                    label: n.label.clone(),
-                                },
+                                var_type: BoundVarType::Node { label: n.label.clone() },
                             });
                         }
                     }
@@ -283,9 +277,7 @@ impl<'a> Binder<'a> {
                                     .as_ref()
                                     .and_then(|l| self.catalog.get_rel_table(l))
                                     .map(|t| t.table_id),
-                                var_type: BoundVarType::Rel {
-                                    label: r.label.clone(),
-                                },
+                                var_type: BoundVarType::Rel { label: r.label.clone() },
                             });
                         }
                     }
@@ -318,9 +310,7 @@ impl<'a> Binder<'a> {
                                 self.scope.define(BoundVariable {
                                     name: alias.clone(),
                                     table_id,
-                                    var_type: BoundVarType::Node {
-                                        label: n.label.clone(),
-                                    },
+                                    var_type: BoundVarType::Node { label: n.label.clone() },
                                 });
                             }
                         }
@@ -358,9 +348,7 @@ impl<'a> Binder<'a> {
                             self.scope.define(BoundVariable {
                                 name: alias.clone(),
                                 table_id: None,
-                                var_type: BoundVarType::Node {
-                                    label: n.label.clone(),
-                                },
+                                var_type: BoundVarType::Node { label: n.label.clone() },
                             });
                         }
                     }
@@ -374,10 +362,7 @@ impl<'a> Binder<'a> {
         match expr {
             Expr::Ident(name) => {
                 if !self.scope.has(name) {
-                    return Err(GqliteError::Parse(format!(
-                        "undefined variable '{}'",
-                        name
-                    )));
+                    return Err(GqliteError::Parse(format!("undefined variable '{}'", name)));
                 }
                 Ok(())
             }
@@ -457,25 +442,15 @@ impl<'a> Binder<'a> {
         }
         Ok(BoundStatement::CreateNodeTable {
             name: s.name.clone(),
-            columns: s
-                .columns
-                .iter()
-                .map(|c| (c.name.clone(), c.data_type.clone()))
-                .collect(),
+            columns: s.columns.iter().map(|c| (c.name.clone(), c.data_type.clone())).collect(),
             primary_key: s.primary_key.clone(),
         })
     }
 
-    fn bind_create_rel_table(
-        &self,
-        s: &CreateRelTableStmt,
-    ) -> Result<BoundStatement, GqliteError> {
+    fn bind_create_rel_table(&self, s: &CreateRelTableStmt) -> Result<BoundStatement, GqliteError> {
         // Validate: FROM and TO tables must exist
         if self.catalog.get_node_table(&s.from_table).is_none() {
-            return Err(GqliteError::Parse(format!(
-                "source table '{}' not found",
-                s.from_table
-            )));
+            return Err(GqliteError::Parse(format!("source table '{}' not found", s.from_table)));
         }
         if self.catalog.get_node_table(&s.to_table).is_none() {
             return Err(GqliteError::Parse(format!(
@@ -487,11 +462,7 @@ impl<'a> Binder<'a> {
             name: s.name.clone(),
             from_table: s.from_table.clone(),
             to_table: s.to_table.clone(),
-            columns: s
-                .columns
-                .iter()
-                .map(|c| (c.name.clone(), c.data_type.clone()))
-                .collect(),
+            columns: s.columns.iter().map(|c| (c.name.clone(), c.data_type.clone())).collect(),
         })
     }
 }
@@ -591,4 +562,3 @@ pub struct BoundMerge {
     pub on_create: Vec<SetItem>,
     pub on_match: Vec<SetItem>,
 }
-

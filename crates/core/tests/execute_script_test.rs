@@ -5,8 +5,9 @@ fn execute_script_multiple_ddl() {
     let db = Database::in_memory();
     db.execute_script(
         "CREATE NODE TABLE Person (id INT64, name STRING, PRIMARY KEY(id)); \
-         CREATE NODE TABLE City (id INT64, name STRING, PRIMARY KEY(id));"
-    ).unwrap();
+         CREATE NODE TABLE City (id INT64, name STRING, PRIMARY KEY(id));",
+    )
+    .unwrap();
 
     let tables = db.node_table_names();
     assert!(tables.contains(&"Person".to_string()), "Person not found: {:?}", tables);
@@ -19,8 +20,9 @@ fn execute_script_ddl_then_dml() {
     db.execute_script(
         "CREATE NODE TABLE N(id INT64, name STRING, PRIMARY KEY(id)); \
          CREATE (n:N {id: 1, name: 'Alice'}); \
-         CREATE (n:N {id: 2, name: 'Bob'});"
-    ).unwrap();
+         CREATE (n:N {id: 2, name: 'Bob'});",
+    )
+    .unwrap();
 
     let result = db.query("MATCH (n:N) RETURN n.name ORDER BY n.name").unwrap();
     assert_eq!(result.num_rows(), 2);
@@ -34,7 +36,7 @@ fn execute_script_stops_on_error() {
     // First statement succeeds, second references non-existent table
     let result = db.execute_script(
         "CREATE NODE TABLE N(id INT64, PRIMARY KEY(id)); \
-         MATCH (n:Bad) RETURN n;"
+         MATCH (n:Bad) RETURN n;",
     );
     // Should fail on the second statement
     assert!(result.is_err());

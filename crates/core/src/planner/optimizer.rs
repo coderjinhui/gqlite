@@ -9,8 +9,7 @@ use crate::planner::logical::LogicalOperator;
 /// Apply all optimization rules to a logical plan.
 pub fn optimize(plan: LogicalOperator) -> LogicalOperator {
     let plan = push_filters_down(plan);
-    let plan = push_projections_down(plan);
-    plan
+    push_projections_down(plan)
 }
 
 // ── Predicate push-down ────────────────────────────────────────
@@ -26,16 +25,12 @@ fn push_filters_down(plan: LogicalOperator) -> LogicalOperator {
             try_push_filter(optimized_input, predicate)
         }
         // Recurse into all operators that have children.
-        LogicalOperator::Projection {
-            input,
-            expressions,
-        } => LogicalOperator::Projection {
-            input: Box::new(push_filters_down(*input)),
-            expressions,
-        },
-        LogicalOperator::ReturnAll { input } => LogicalOperator::ReturnAll {
-            input: Box::new(push_filters_down(*input)),
-        },
+        LogicalOperator::Projection { input, expressions } => {
+            LogicalOperator::Projection { input: Box::new(push_filters_down(*input)), expressions }
+        }
+        LogicalOperator::ReturnAll { input } => {
+            LogicalOperator::ReturnAll { input: Box::new(push_filters_down(*input)) }
+        }
         LogicalOperator::Expand {
             input,
             rel_table_name,
@@ -82,36 +77,26 @@ fn push_filters_down(plan: LogicalOperator) -> LogicalOperator {
             min_hops,
             max_hops,
         },
-        LogicalOperator::HashJoin {
-            build,
-            probe,
-            build_key,
-            probe_key,
-        } => LogicalOperator::HashJoin {
-            build: Box::new(push_filters_down(*build)),
-            probe: Box::new(push_filters_down(*probe)),
-            build_key,
-            probe_key,
-        },
-        LogicalOperator::OrderBy { input, items } => LogicalOperator::OrderBy {
-            input: Box::new(push_filters_down(*input)),
-            items,
-        },
-        LogicalOperator::Limit { input, count } => LogicalOperator::Limit {
-            input: Box::new(push_filters_down(*input)),
-            count,
-        },
-        LogicalOperator::Skip { input, count } => LogicalOperator::Skip {
-            input: Box::new(push_filters_down(*input)),
-            count,
-        },
-        LogicalOperator::Aggregate {
-            input,
-            expressions,
-        } => LogicalOperator::Aggregate {
-            input: Box::new(push_filters_down(*input)),
-            expressions,
-        },
+        LogicalOperator::HashJoin { build, probe, build_key, probe_key } => {
+            LogicalOperator::HashJoin {
+                build: Box::new(push_filters_down(*build)),
+                probe: Box::new(push_filters_down(*probe)),
+                build_key,
+                probe_key,
+            }
+        }
+        LogicalOperator::OrderBy { input, items } => {
+            LogicalOperator::OrderBy { input: Box::new(push_filters_down(*input)), items }
+        }
+        LogicalOperator::Limit { input, count } => {
+            LogicalOperator::Limit { input: Box::new(push_filters_down(*input)), count }
+        }
+        LogicalOperator::Skip { input, count } => {
+            LogicalOperator::Skip { input: Box::new(push_filters_down(*input)), count }
+        }
+        LogicalOperator::Aggregate { input, expressions } => {
+            LogicalOperator::Aggregate { input: Box::new(push_filters_down(*input)), expressions }
+        }
         LogicalOperator::InsertRel {
             input,
             rel_table_name,
@@ -127,23 +112,17 @@ fn push_filters_down(plan: LogicalOperator) -> LogicalOperator {
             dst_alias,
             properties,
         },
-        LogicalOperator::SetProperty { input, items } => LogicalOperator::SetProperty {
-            input: Box::new(push_filters_down(*input)),
-            items,
-        },
-        LogicalOperator::Delete {
-            input,
-            detach,
-            variables,
-        } => LogicalOperator::Delete {
+        LogicalOperator::SetProperty { input, items } => {
+            LogicalOperator::SetProperty { input: Box::new(push_filters_down(*input)), items }
+        }
+        LogicalOperator::Delete { input, detach, variables } => LogicalOperator::Delete {
             input: Box::new(push_filters_down(*input)),
             detach,
             variables,
         },
-        LogicalOperator::CallSubquery { input, subquery } => LogicalOperator::CallSubquery {
-            input: Box::new(push_filters_down(*input)),
-            subquery,
-        },
+        LogicalOperator::CallSubquery { input, subquery } => {
+            LogicalOperator::CallSubquery { input: Box::new(push_filters_down(*input)), subquery }
+        }
         // Leaf / DDL nodes — nothing to optimize.
         other => other,
     }
@@ -189,11 +168,8 @@ fn push_conjuncts(plan: LogicalOperator, conjuncts: Vec<Expr>) -> LogicalOperato
                 }
             }
 
-            let new_input = if pushable.is_empty() {
-                *input
-            } else {
-                push_conjuncts(*input, pushable)
-            };
+            let new_input =
+                if pushable.is_empty() { *input } else { push_conjuncts(*input, pushable) };
 
             let expand = LogicalOperator::Expand {
                 input: Box::new(new_input),
@@ -211,12 +187,7 @@ fn push_conjuncts(plan: LogicalOperator, conjuncts: Vec<Expr>) -> LogicalOperato
             wrap_with_filter(expand, remaining)
         }
 
-        LogicalOperator::HashJoin {
-            build,
-            probe,
-            build_key,
-            probe_key,
-        } => {
+        LogicalOperator::HashJoin { build, probe, build_key, probe_key } => {
             let build_aliases = collect_plan_aliases(&build);
             let probe_aliases = collect_plan_aliases(&probe);
 
@@ -235,16 +206,10 @@ fn push_conjuncts(plan: LogicalOperator, conjuncts: Vec<Expr>) -> LogicalOperato
                 }
             }
 
-            let new_build = if push_build.is_empty() {
-                *build
-            } else {
-                push_conjuncts(*build, push_build)
-            };
-            let new_probe = if push_probe.is_empty() {
-                *probe
-            } else {
-                push_conjuncts(*probe, push_probe)
-            };
+            let new_build =
+                if push_build.is_empty() { *build } else { push_conjuncts(*build, push_build) };
+            let new_probe =
+                if push_probe.is_empty() { *probe } else { push_conjuncts(*probe, push_probe) };
 
             let join = LogicalOperator::HashJoin {
                 build: Box::new(new_build),
@@ -264,11 +229,7 @@ fn push_conjuncts(plan: LogicalOperator, conjuncts: Vec<Expr>) -> LogicalOperato
 /// Split an AND expression into individual conjuncts.
 pub fn split_conjuncts(expr: Expr) -> Vec<Expr> {
     match expr {
-        Expr::BinaryOp {
-            left,
-            op: BinOp::And,
-            right,
-        } => {
+        Expr::BinaryOp { left, op: BinOp::And, right } => {
             let mut result = split_conjuncts(*left);
             result.extend(split_conjuncts(*right));
             result
@@ -291,10 +252,7 @@ pub fn combine_conjuncts(conjuncts: Vec<Expr>) -> Option<Expr> {
 /// Wrap a plan with a Filter if there are remaining conjuncts.
 fn wrap_with_filter(plan: LogicalOperator, conjuncts: Vec<Expr>) -> LogicalOperator {
     match combine_conjuncts(conjuncts) {
-        Some(predicate) => LogicalOperator::Filter {
-            input: Box::new(plan),
-            predicate,
-        },
+        Some(predicate) => LogicalOperator::Filter { input: Box::new(plan), predicate },
         None => plan,
     }
 }
@@ -313,12 +271,7 @@ fn collect_aliases_recursive(plan: &LogicalOperator, aliases: &mut Vec<String>) 
                 aliases.push(alias.clone());
             }
         }
-        LogicalOperator::Expand {
-            input,
-            dst_alias,
-            rel_alias,
-            ..
-        } => {
+        LogicalOperator::Expand { input, dst_alias, rel_alias, .. } => {
             collect_aliases_recursive(input, aliases);
             if !dst_alias.is_empty() {
                 aliases.push(dst_alias.clone());
@@ -329,11 +282,7 @@ fn collect_aliases_recursive(plan: &LogicalOperator, aliases: &mut Vec<String>) 
                 }
             }
         }
-        LogicalOperator::RecursiveExpand {
-            input,
-            dst_alias,
-            ..
-        } => {
+        LogicalOperator::RecursiveExpand { input, dst_alias, .. } => {
             collect_aliases_recursive(input, aliases);
             if !dst_alias.is_empty() {
                 aliases.push(dst_alias.clone());
@@ -460,10 +409,7 @@ fn collect_required_columns(plan: &LogicalOperator) -> Vec<ColumnRef> {
 
 fn collect_required_recursive(plan: &LogicalOperator, cols: &mut Vec<ColumnRef>) {
     match plan {
-        LogicalOperator::Projection {
-            input,
-            expressions,
-        } => {
+        LogicalOperator::Projection { input, expressions } => {
             for (expr, _) in expressions {
                 collect_expr_columns(expr, cols);
             }
@@ -483,10 +429,7 @@ fn collect_required_recursive(plan: &LogicalOperator, cols: &mut Vec<ColumnRef>)
             }
             collect_required_recursive(input, cols);
         }
-        LogicalOperator::Aggregate {
-            input,
-            expressions,
-        } => {
+        LogicalOperator::Aggregate { input, expressions } => {
             for (expr, _) in expressions {
                 collect_expr_columns(expr, cols);
             }
@@ -513,8 +456,7 @@ fn collect_required_recursive(plan: &LogicalOperator, cols: &mut Vec<ColumnRef>)
             }
             collect_required_recursive(input, cols);
         }
-        LogicalOperator::Delete { input, .. }
-        | LogicalOperator::InsertRel { input, .. } => {
+        LogicalOperator::Delete { input, .. } | LogicalOperator::InsertRel { input, .. } => {
             collect_required_recursive(input, cols);
         }
         LogicalOperator::CallSubquery { input, .. } => {
@@ -589,34 +531,18 @@ fn collect_expr_columns(expr: &Expr, cols: &mut Vec<ColumnRef>) {
 
 /// Recursively apply projection pushdown: set ScanNode.columns to only
 /// the required column indices.
-fn apply_projection_pushdown(
-    plan: LogicalOperator,
-    required: &[ColumnRef],
-) -> LogicalOperator {
+fn apply_projection_pushdown(plan: LogicalOperator, required: &[ColumnRef]) -> LogicalOperator {
     match plan {
-        LogicalOperator::ScanNode {
-            table_name,
-            table_id,
-            columns: _,
-            alias,
-        } => {
+        LogicalOperator::ScanNode { table_name, table_id, columns: _, alias } => {
             // Find which columns of this scan alias are needed.
-            let needed: Vec<String> = required
-                .iter()
-                .filter(|(a, _)| *a == alias)
-                .map(|(_, col)| col.clone())
-                .collect();
+            let needed: Vec<String> =
+                required.iter().filter(|(a, _)| *a == alias).map(|(_, col)| col.clone()).collect();
 
             // If no specific columns requested, this means either RETURN *
             // or no projection references this alias at all. In both cases
             // keep the original empty vec (= read all columns).
             if needed.is_empty() {
-                return LogicalOperator::ScanNode {
-                    table_name,
-                    table_id,
-                    columns: vec![],
-                    alias,
-                };
+                return LogicalOperator::ScanNode { table_name, table_id, columns: vec![], alias };
             }
 
             // We don't have catalog access here to resolve names → indices,
@@ -629,21 +555,13 @@ fn apply_projection_pushdown(
             //
             // TODO: Once executor respects ScanNode.columns, resolve names
             // to indices here using catalog metadata.
-            LogicalOperator::ScanNode {
-                table_name,
-                table_id,
-                columns: vec![],
-                alias,
-            }
+            LogicalOperator::ScanNode { table_name, table_id, columns: vec![], alias }
         }
         LogicalOperator::Filter { input, predicate } => LogicalOperator::Filter {
             input: Box::new(apply_projection_pushdown(*input, required)),
             predicate,
         },
-        LogicalOperator::Projection {
-            input,
-            expressions,
-        } => LogicalOperator::Projection {
+        LogicalOperator::Projection { input, expressions } => LogicalOperator::Projection {
             input: Box::new(apply_projection_pushdown(*input, required)),
             expressions,
         },
@@ -696,17 +614,14 @@ fn apply_projection_pushdown(
             min_hops,
             max_hops,
         },
-        LogicalOperator::HashJoin {
-            build,
-            probe,
-            build_key,
-            probe_key,
-        } => LogicalOperator::HashJoin {
-            build: Box::new(apply_projection_pushdown(*build, required)),
-            probe: Box::new(apply_projection_pushdown(*probe, required)),
-            build_key,
-            probe_key,
-        },
+        LogicalOperator::HashJoin { build, probe, build_key, probe_key } => {
+            LogicalOperator::HashJoin {
+                build: Box::new(apply_projection_pushdown(*build, required)),
+                probe: Box::new(apply_projection_pushdown(*probe, required)),
+                build_key,
+                probe_key,
+            }
+        }
         LogicalOperator::OrderBy { input, items } => LogicalOperator::OrderBy {
             input: Box::new(apply_projection_pushdown(*input, required)),
             items,
@@ -719,10 +634,7 @@ fn apply_projection_pushdown(
             input: Box::new(apply_projection_pushdown(*input, required)),
             count,
         },
-        LogicalOperator::Aggregate {
-            input,
-            expressions,
-        } => LogicalOperator::Aggregate {
+        LogicalOperator::Aggregate { input, expressions } => LogicalOperator::Aggregate {
             input: Box::new(apply_projection_pushdown(*input, required)),
             expressions,
         },
@@ -733,4 +645,3 @@ fn apply_projection_pushdown(
         other => other,
     }
 }
-

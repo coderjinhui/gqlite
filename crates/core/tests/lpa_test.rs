@@ -4,22 +4,16 @@ use gqlite_core::Database;
 fn lpa_single_community() {
     // Fully connected triangle: 1-2, 2-3, 1-3 — all should converge to same community
     let db = Database::in_memory();
-    db.execute("CREATE NODE TABLE N(id INT64, PRIMARY KEY(id))")
-        .unwrap();
+    db.execute("CREATE NODE TABLE N(id INT64, PRIMARY KEY(id))").unwrap();
     db.execute("CREATE REL TABLE E(FROM N TO N)").unwrap();
     db.execute("CREATE (n:N {id: 1})").unwrap();
     db.execute("CREATE (n:N {id: 2})").unwrap();
     db.execute("CREATE (n:N {id: 3})").unwrap();
-    db.execute("MATCH (a:N), (b:N) WHERE a.id = 1 AND b.id = 2 CREATE (a)-[:E]->(b)")
-        .unwrap();
-    db.execute("MATCH (a:N), (b:N) WHERE a.id = 2 AND b.id = 3 CREATE (a)-[:E]->(b)")
-        .unwrap();
-    db.execute("MATCH (a:N), (b:N) WHERE a.id = 1 AND b.id = 3 CREATE (a)-[:E]->(b)")
-        .unwrap();
+    db.execute("MATCH (a:N), (b:N) WHERE a.id = 1 AND b.id = 2 CREATE (a)-[:E]->(b)").unwrap();
+    db.execute("MATCH (a:N), (b:N) WHERE a.id = 2 AND b.id = 3 CREATE (a)-[:E]->(b)").unwrap();
+    db.execute("MATCH (a:N), (b:N) WHERE a.id = 1 AND b.id = 3 CREATE (a)-[:E]->(b)").unwrap();
 
-    let result = db
-        .query("CALL label_propagation('E') YIELD node_id, community")
-        .unwrap();
+    let result = db.query("CALL label_propagation('E') YIELD node_id, community").unwrap();
     assert_eq!(result.num_rows(), 3);
 
     // All nodes should share the same community
@@ -32,31 +26,21 @@ fn lpa_single_community() {
 fn lpa_two_communities() {
     // Two disconnected groups: {1,2,3} and {4,5,6}
     let db = Database::in_memory();
-    db.execute("CREATE NODE TABLE N(id INT64, PRIMARY KEY(id))")
-        .unwrap();
+    db.execute("CREATE NODE TABLE N(id INT64, PRIMARY KEY(id))").unwrap();
     db.execute("CREATE REL TABLE E(FROM N TO N)").unwrap();
     for i in 1..=6 {
-        db.execute(&format!("CREATE (n:N {{id: {}}})", i))
-            .unwrap();
+        db.execute(&format!("CREATE (n:N {{id: {}}})", i)).unwrap();
     }
     // Group 1: triangle 1-2-3
-    db.execute("MATCH (a:N), (b:N) WHERE a.id = 1 AND b.id = 2 CREATE (a)-[:E]->(b)")
-        .unwrap();
-    db.execute("MATCH (a:N), (b:N) WHERE a.id = 2 AND b.id = 3 CREATE (a)-[:E]->(b)")
-        .unwrap();
-    db.execute("MATCH (a:N), (b:N) WHERE a.id = 1 AND b.id = 3 CREATE (a)-[:E]->(b)")
-        .unwrap();
+    db.execute("MATCH (a:N), (b:N) WHERE a.id = 1 AND b.id = 2 CREATE (a)-[:E]->(b)").unwrap();
+    db.execute("MATCH (a:N), (b:N) WHERE a.id = 2 AND b.id = 3 CREATE (a)-[:E]->(b)").unwrap();
+    db.execute("MATCH (a:N), (b:N) WHERE a.id = 1 AND b.id = 3 CREATE (a)-[:E]->(b)").unwrap();
     // Group 2: triangle 4-5-6
-    db.execute("MATCH (a:N), (b:N) WHERE a.id = 4 AND b.id = 5 CREATE (a)-[:E]->(b)")
-        .unwrap();
-    db.execute("MATCH (a:N), (b:N) WHERE a.id = 5 AND b.id = 6 CREATE (a)-[:E]->(b)")
-        .unwrap();
-    db.execute("MATCH (a:N), (b:N) WHERE a.id = 4 AND b.id = 6 CREATE (a)-[:E]->(b)")
-        .unwrap();
+    db.execute("MATCH (a:N), (b:N) WHERE a.id = 4 AND b.id = 5 CREATE (a)-[:E]->(b)").unwrap();
+    db.execute("MATCH (a:N), (b:N) WHERE a.id = 5 AND b.id = 6 CREATE (a)-[:E]->(b)").unwrap();
+    db.execute("MATCH (a:N), (b:N) WHERE a.id = 4 AND b.id = 6 CREATE (a)-[:E]->(b)").unwrap();
 
-    let result = db
-        .query("CALL label_propagation('E') YIELD node_id, community")
-        .unwrap();
+    let result = db.query("CALL label_propagation('E') YIELD node_id, community").unwrap();
     assert_eq!(result.num_rows(), 6);
 
     let rows = result.rows();
@@ -78,19 +62,15 @@ fn lpa_two_communities() {
 fn lpa_isolated_node() {
     // One isolated node with no edges — community should be itself
     let db = Database::in_memory();
-    db.execute("CREATE NODE TABLE N(id INT64, PRIMARY KEY(id))")
-        .unwrap();
+    db.execute("CREATE NODE TABLE N(id INT64, PRIMARY KEY(id))").unwrap();
     db.execute("CREATE REL TABLE E(FROM N TO N)").unwrap();
     db.execute("CREATE (n:N {id: 1})").unwrap();
     db.execute("CREATE (n:N {id: 2})").unwrap();
     // Only an edge between 1 and 2; node 3 is isolated
     db.execute("CREATE (n:N {id: 3})").unwrap();
-    db.execute("MATCH (a:N), (b:N) WHERE a.id = 1 AND b.id = 2 CREATE (a)-[:E]->(b)")
-        .unwrap();
+    db.execute("MATCH (a:N), (b:N) WHERE a.id = 1 AND b.id = 2 CREATE (a)-[:E]->(b)").unwrap();
 
-    let result = db
-        .query("CALL label_propagation('E') YIELD node_id, community")
-        .unwrap();
+    let result = db.query("CALL label_propagation('E') YIELD node_id, community").unwrap();
     assert_eq!(result.num_rows(), 3);
 
     let rows = result.rows();
@@ -116,24 +96,18 @@ fn lpa_unknown_rel_table_errors() {
 fn lpa_with_yield_filter() {
     // Use WHERE on YIELD to filter by community
     let db = Database::in_memory();
-    db.execute("CREATE NODE TABLE N(id INT64, PRIMARY KEY(id))")
-        .unwrap();
+    db.execute("CREATE NODE TABLE N(id INT64, PRIMARY KEY(id))").unwrap();
     db.execute("CREATE REL TABLE E(FROM N TO N)").unwrap();
     db.execute("CREATE (n:N {id: 1})").unwrap();
     db.execute("CREATE (n:N {id: 2})").unwrap();
     db.execute("CREATE (n:N {id: 3})").unwrap();
     // Triangle so all end up in same community
-    db.execute("MATCH (a:N), (b:N) WHERE a.id = 1 AND b.id = 2 CREATE (a)-[:E]->(b)")
-        .unwrap();
-    db.execute("MATCH (a:N), (b:N) WHERE a.id = 2 AND b.id = 3 CREATE (a)-[:E]->(b)")
-        .unwrap();
-    db.execute("MATCH (a:N), (b:N) WHERE a.id = 1 AND b.id = 3 CREATE (a)-[:E]->(b)")
-        .unwrap();
+    db.execute("MATCH (a:N), (b:N) WHERE a.id = 1 AND b.id = 2 CREATE (a)-[:E]->(b)").unwrap();
+    db.execute("MATCH (a:N), (b:N) WHERE a.id = 2 AND b.id = 3 CREATE (a)-[:E]->(b)").unwrap();
+    db.execute("MATCH (a:N), (b:N) WHERE a.id = 1 AND b.id = 3 CREATE (a)-[:E]->(b)").unwrap();
 
     // First, find the community value
-    let result = db
-        .query("CALL label_propagation('E') YIELD node_id, community")
-        .unwrap();
+    let result = db.query("CALL label_propagation('E') YIELD node_id, community").unwrap();
     let community_val = result.rows()[0].get_int(1).unwrap();
 
     // Now filter by that community value

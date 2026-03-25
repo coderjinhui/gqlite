@@ -3,34 +3,22 @@ use gqlite_core::types::value::Value;
 
 #[test]
 fn test_lower() {
-    assert_eq!(
-        fn_lower(&[Value::String("HELLO".into())]).unwrap(),
-        Value::String("hello".into())
-    );
+    assert_eq!(fn_lower(&[Value::String("HELLO".into())]).unwrap(), Value::String("hello".into()));
 }
 
 #[test]
 fn test_upper() {
-    assert_eq!(
-        fn_upper(&[Value::String("hello".into())]).unwrap(),
-        Value::String("HELLO".into())
-    );
+    assert_eq!(fn_upper(&[Value::String("hello".into())]).unwrap(), Value::String("HELLO".into()));
 }
 
 #[test]
 fn test_trim() {
-    assert_eq!(
-        fn_trim(&[Value::String("  hi  ".into())]).unwrap(),
-        Value::String("hi".into())
-    );
+    assert_eq!(fn_trim(&[Value::String("  hi  ".into())]).unwrap(), Value::String("hi".into()));
 }
 
 #[test]
 fn test_length() {
-    assert_eq!(
-        fn_length(&[Value::String("hello".into())]).unwrap(),
-        Value::Int(5)
-    );
+    assert_eq!(fn_length(&[Value::String("hello".into())]).unwrap(), Value::Int(5));
 }
 
 #[test]
@@ -43,10 +31,7 @@ fn test_concat() {
 
 #[test]
 fn test_coalesce() {
-    assert_eq!(
-        fn_coalesce(&[Value::Null, Value::Int(42)]).unwrap(),
-        Value::Int(42)
-    );
+    assert_eq!(fn_coalesce(&[Value::Null, Value::Int(42)]).unwrap(), Value::Int(42));
     assert_eq!(fn_coalesce(&[Value::Null]).unwrap(), Value::Null);
 }
 
@@ -57,18 +42,12 @@ fn test_null_propagation() {
 
 #[test]
 fn test_ltrim() {
-    assert_eq!(
-        fn_ltrim(&[Value::String("  hi  ".into())]).unwrap(),
-        Value::String("hi  ".into())
-    );
+    assert_eq!(fn_ltrim(&[Value::String("  hi  ".into())]).unwrap(), Value::String("hi  ".into()));
 }
 
 #[test]
 fn test_rtrim() {
-    assert_eq!(
-        fn_rtrim(&[Value::String("  hi  ".into())]).unwrap(),
-        Value::String("  hi".into())
-    );
+    assert_eq!(fn_rtrim(&[Value::String("  hi  ".into())]).unwrap(), Value::String("  hi".into()));
 }
 
 #[test]
@@ -102,10 +81,7 @@ fn test_replace() {
 
 #[test]
 fn test_reverse() {
-    assert_eq!(
-        fn_reverse(&[Value::String("abc".into())]).unwrap(),
-        Value::String("cba".into())
-    );
+    assert_eq!(fn_reverse(&[Value::String("abc".into())]).unwrap(), Value::String("cba".into()));
 }
 
 #[test]
@@ -131,8 +107,7 @@ fn test_lpad() {
         Value::String("   hi".into())
     );
     assert_eq!(
-        fn_lpad(&[Value::String("hi".into()), Value::Int(5), Value::String("0".into())])
-            .unwrap(),
+        fn_lpad(&[Value::String("hi".into()), Value::Int(5), Value::String("0".into())]).unwrap(),
         Value::String("000hi".into())
     );
 }
@@ -144,8 +119,7 @@ fn test_rpad() {
         Value::String("hi   ".into())
     );
     assert_eq!(
-        fn_rpad(&[Value::String("hi".into()), Value::Int(5), Value::String("0".into())])
-            .unwrap(),
+        fn_rpad(&[Value::String("hi".into()), Value::Int(5), Value::String("0".into())]).unwrap(),
         Value::String("hi000".into())
     );
 }
@@ -187,6 +161,7 @@ fn test_ends_with() {
 }
 
 #[test]
+#[allow(clippy::approx_constant)]
 fn test_abs() {
     assert_eq!(fn_abs(&[Value::Int(-5)]).unwrap(), Value::Int(5));
     assert_eq!(fn_abs(&[Value::Float(-3.14)]).unwrap(), Value::Float(3.14));
@@ -194,10 +169,7 @@ fn test_abs() {
 
 #[test]
 fn test_to_string() {
-    assert_eq!(
-        fn_to_string(&[Value::Int(42)]).unwrap(),
-        Value::String("42".into())
-    );
+    assert_eq!(fn_to_string(&[Value::Int(42)]).unwrap(), Value::String("42".into()));
 }
 
 // --- List function tests ---
@@ -209,33 +181,18 @@ fn sample_list() -> Value {
 #[test]
 fn test_list_len() {
     assert_eq!(fn_list_len(&[sample_list()]).unwrap(), Value::Int(3));
-    assert_eq!(
-        fn_list_len(&[Value::List(vec![])]).unwrap(),
-        Value::Int(0)
-    );
+    assert_eq!(fn_list_len(&[Value::List(vec![])]).unwrap(), Value::Int(0));
 }
 
 #[test]
 fn test_list_extract() {
     // 1-based indexing
-    assert_eq!(
-        fn_list_extract(&[sample_list(), Value::Int(1)]).unwrap(),
-        Value::Int(1)
-    );
-    assert_eq!(
-        fn_list_extract(&[sample_list(), Value::Int(3)]).unwrap(),
-        Value::Int(3)
-    );
+    assert_eq!(fn_list_extract(&[sample_list(), Value::Int(1)]).unwrap(), Value::Int(1));
+    assert_eq!(fn_list_extract(&[sample_list(), Value::Int(3)]).unwrap(), Value::Int(3));
     // negative index
-    assert_eq!(
-        fn_list_extract(&[sample_list(), Value::Int(-1)]).unwrap(),
-        Value::Int(3)
-    );
+    assert_eq!(fn_list_extract(&[sample_list(), Value::Int(-1)]).unwrap(), Value::Int(3));
     // out of bounds
-    assert_eq!(
-        fn_list_extract(&[sample_list(), Value::Int(10)]).unwrap(),
-        Value::Null
-    );
+    assert_eq!(fn_list_extract(&[sample_list(), Value::Int(10)]).unwrap(), Value::Null);
 }
 
 #[test]
@@ -266,14 +223,8 @@ fn test_list_concat() {
 
 #[test]
 fn test_list_contains() {
-    assert_eq!(
-        fn_list_contains(&[sample_list(), Value::Int(2)]).unwrap(),
-        Value::Bool(true)
-    );
-    assert_eq!(
-        fn_list_contains(&[sample_list(), Value::Int(9)]).unwrap(),
-        Value::Bool(false)
-    );
+    assert_eq!(fn_list_contains(&[sample_list(), Value::Int(2)]).unwrap(), Value::Bool(true));
+    assert_eq!(fn_list_contains(&[sample_list(), Value::Int(9)]).unwrap(), Value::Bool(false));
 }
 
 #[test]
@@ -295,7 +246,13 @@ fn test_list_sort() {
 
 #[test]
 fn test_list_distinct() {
-    let dupes = Value::List(vec![Value::Int(1), Value::Int(2), Value::Int(1), Value::Int(3), Value::Int(2)]);
+    let dupes = Value::List(vec![
+        Value::Int(1),
+        Value::Int(2),
+        Value::Int(1),
+        Value::Int(3),
+        Value::Int(2),
+    ]);
     assert_eq!(
         fn_list_distinct(&[dupes]).unwrap(),
         Value::List(vec![Value::Int(1), Value::Int(2), Value::Int(3)])
@@ -306,7 +263,13 @@ fn test_list_distinct() {
 fn test_range() {
     assert_eq!(
         fn_range(&[Value::Int(1), Value::Int(5)]).unwrap(),
-        Value::List(vec![Value::Int(1), Value::Int(2), Value::Int(3), Value::Int(4), Value::Int(5)])
+        Value::List(vec![
+            Value::Int(1),
+            Value::Int(2),
+            Value::Int(3),
+            Value::Int(4),
+            Value::Int(5)
+        ])
     );
     // with step
     assert_eq!(
@@ -316,6 +279,12 @@ fn test_range() {
     // descending
     assert_eq!(
         fn_range(&[Value::Int(5), Value::Int(1)]).unwrap(),
-        Value::List(vec![Value::Int(5), Value::Int(4), Value::Int(3), Value::Int(2), Value::Int(1)])
+        Value::List(vec![
+            Value::Int(5),
+            Value::Int(4),
+            Value::Int(3),
+            Value::Int(2),
+            Value::Int(1)
+        ])
     );
 }

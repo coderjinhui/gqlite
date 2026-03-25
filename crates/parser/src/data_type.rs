@@ -28,9 +28,9 @@ impl DataType {
             DataType::Double => Some(8),
             DataType::InternalId => Some(12), // u32 + u64
             DataType::String => None,
-            DataType::Date => Some(4),       // i32 days since CE
-            DataType::DateTime => Some(8),   // i64 millis since epoch
-            DataType::Duration => Some(8),   // i64 millis
+            DataType::Date => Some(4),     // i32 days since CE
+            DataType::DateTime => Some(8), // i64 millis since epoch
+            DataType::Duration => Some(8), // i64 millis
         }
     }
 

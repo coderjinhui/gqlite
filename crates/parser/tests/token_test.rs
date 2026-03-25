@@ -32,6 +32,7 @@ fn string_literal_escape() {
 }
 
 #[test]
+#[allow(clippy::approx_constant)]
 fn int_and_float() {
     let tokens = tokenize("42 3.14").unwrap();
     assert_eq!(tokens[0], Token::IntLit(42));

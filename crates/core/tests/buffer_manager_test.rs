@@ -151,3 +151,58 @@ fn evict_all_clears_cache() {
 
     cleanup(&path);
 }
+
+#[test]
+fn buffer_pool_stats() {
+    use std::sync::atomic::Ordering;
+
+    let path = temp_path("bp_stats.graph");
+    cleanup(&path);
+
+    let pager = Pager::create(&path).unwrap();
+    let mut pool = BufferPool::with_capacity(pager, 4);
+
+    // Allocate and write pages
+    let p1 = pool.allocate_page().unwrap();
+    let p2 = pool.allocate_page().unwrap();
+    let data = vec![0xABu8; PAGE_SIZE as usize];
+    pool.write_page(p1, &data).unwrap();
+    pool.write_page(p2, &data).unwrap();
+
+    // First read = miss (p1 is already in cache from write, so re-read another)
+    pool.evict_all().unwrap();
+    let _ = pool.read_page(p1).unwrap(); // miss
+    assert!(pool.stats.misses.load(Ordering::Relaxed) >= 1);
+
+    let _ = pool.read_page(p1).unwrap(); // hit
+    assert!(pool.stats.hits.load(Ordering::Relaxed) >= 1);
+
+    // Hit rate should be > 0
+    assert!(pool.stats.hit_rate() > 0.0);
+
+    cleanup(&path);
+}
+
+#[test]
+fn buffer_pool_eviction_stats() {
+    use std::sync::atomic::Ordering;
+
+    let path = temp_path("bp_evict_stats.graph");
+    cleanup(&path);
+
+    let pager = Pager::create(&path).unwrap();
+    let mut pool = BufferPool::with_capacity(pager, 2);
+
+    let p1 = pool.allocate_page().unwrap();
+    let p2 = pool.allocate_page().unwrap();
+    let p3 = pool.allocate_page().unwrap();
+    let data = vec![0u8; PAGE_SIZE as usize];
+    pool.write_page(p1, &data).unwrap();
+    pool.write_page(p2, &data).unwrap();
+    pool.write_page(p3, &data).unwrap();
+
+    assert!(pool.stats.evictions.load(Ordering::Relaxed) >= 1);
+    assert_eq!(pool.cached_count(), 2);
+
+    cleanup(&path);
+}

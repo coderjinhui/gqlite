@@ -5,14 +5,14 @@ use logos::Logos;
 fn parse_ident_or_keyword(lex: &mut logos::Lexer<Token>) -> logos::FilterResult<String, ()> {
     let slice = lex.slice();
     match slice.to_uppercase().as_str() {
-        "MATCH" | "OPTIONAL" | "WHERE" | "RETURN" | "WITH" | "ORDER" | "BY" | "ASC"
-        | "DESC" | "LIMIT" | "SKIP" | "CREATE" | "SET" | "DELETE" | "DETACH" | "MERGE"
-        | "NODE" | "REL" | "TABLE" | "DROP" | "PRIMARY" | "KEY" | "AND" | "OR" | "NOT"
-        | "IS" | "NULL" | "TRUE" | "FALSE" | "AS" | "IN" | "EXISTS" | "DISTINCT"
-        | "UNION" | "ALL" | "UNWIND" | "ON" | "BEGIN" | "COMMIT" | "ROLLBACK" | "CASE"
-        | "WHEN" | "THEN" | "ELSE" | "END" | "FROM" | "TO" | "INT64" | "DOUBLE"
-        | "STRING" | "BOOL" | "SERIAL" | "ALTER" | "ADD" | "RENAME" | "COLUMN"
-        | "COPY" | "HEADER" | "DELIMITER" | "CAST" | "CALL" | "YIELD" => logos::FilterResult::Skip,
+        "MATCH" | "OPTIONAL" | "WHERE" | "RETURN" | "WITH" | "ORDER" | "BY" | "ASC" | "DESC"
+        | "LIMIT" | "SKIP" | "CREATE" | "SET" | "DELETE" | "DETACH" | "MERGE" | "NODE" | "REL"
+        | "TABLE" | "DROP" | "PRIMARY" | "KEY" | "AND" | "OR" | "NOT" | "IS" | "NULL" | "TRUE"
+        | "FALSE" | "AS" | "IN" | "EXISTS" | "DISTINCT" | "UNION" | "ALL" | "UNWIND" | "ON"
+        | "BEGIN" | "COMMIT" | "ROLLBACK" | "EXPLAIN" | "CASE" | "WHEN" | "THEN" | "ELSE"
+        | "END" | "FROM" | "TO" | "INT64" | "DOUBLE" | "STRING" | "BOOL" | "SERIAL" | "ALTER"
+        | "ADD" | "RENAME" | "COLUMN" | "COPY" | "HEADER" | "DELIMITER" | "CAST" | "CALL"
+        | "YIELD" => logos::FilterResult::Skip,
         _ => logos::FilterResult::Emit(slice.to_string()),
     }
 }
@@ -128,6 +128,8 @@ pub enum Token {
     Commit,
     #[regex("(?i)rollback", priority = 10)]
     Rollback,
+    #[regex("(?i)explain", priority = 10)]
+    Explain,
     #[regex("(?i)case", priority = 10)]
     Case,
     #[regex("(?i)when", priority = 10)]

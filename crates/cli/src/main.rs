@@ -60,10 +60,7 @@ fn parse_args() -> CliArgs {
         std::process::exit(1);
     };
 
-    CliArgs {
-        database,
-        read_only,
-    }
+    CliArgs { database, read_only }
 }
 
 fn print_usage() {
@@ -92,10 +89,7 @@ fn main() {
     let cli = parse_args();
     let db_path = ensure_graph_extension(&cli.database);
 
-    let config = DatabaseConfig {
-        read_only: cli.read_only,
-        ..DatabaseConfig::default()
-    };
+    let config = DatabaseConfig { read_only: cli.read_only, ..DatabaseConfig::default() };
 
     let mut db = match Database::open_with_config(&db_path, config) {
         Ok(db) => db,
@@ -112,9 +106,7 @@ fn main() {
     }
     println!("Type .help for usage hints.\n");
 
-    let config = Config::builder()
-        .completion_type(CompletionType::List)
-        .build();
+    let config = Config::builder().completion_type(CompletionType::List).build();
     let mut rl = Editor::with_config(config).expect("failed to create editor");
     rl.set_helper(Some(helper::GqliteHelper));
 
@@ -124,11 +116,7 @@ fn main() {
     let mut buf = String::new();
 
     loop {
-        let prompt = if buf.is_empty() {
-            "gqlite> "
-        } else {
-            "   ...> "
-        };
+        let prompt = if buf.is_empty() { "gqlite> " } else { "   ...> " };
         match rl.readline(prompt) {
             Ok(line) => {
                 let trimmed = line.trim();
@@ -415,7 +403,5 @@ fn ensure_graph_extension(path: &str) -> PathBuf {
 }
 
 fn home_dir() -> PathBuf {
-    std::env::var("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("."))
+    std::env::var("HOME").map(PathBuf::from).unwrap_or_else(|_| PathBuf::from("."))
 }

@@ -3,16 +3,14 @@ use gqlite_core::Database;
 /// Helper: create an in-memory DB with a self-referencing node/rel schema.
 fn setup_db() -> Database {
     let db = Database::in_memory();
-    db.execute("CREATE NODE TABLE N(id INT64, PRIMARY KEY(id))")
-        .unwrap();
+    db.execute("CREATE NODE TABLE N(id INT64, PRIMARY KEY(id))").unwrap();
     db.execute("CREATE REL TABLE E(FROM N TO N)").unwrap();
     db
 }
 
 /// Helper: create a node with the given id.
 fn create_node(db: &Database, id: i64) {
-    db.execute(&format!("CREATE (n:N {{id: {}}})", id))
-        .unwrap();
+    db.execute(&format!("CREATE (n:N {{id: {}}})", id)).unwrap();
 }
 
 /// Helper: create an edge from src to dst.
@@ -38,17 +36,12 @@ fn betweenness_chain() {
     create_edge(&db, 1, 2);
     create_edge(&db, 2, 3);
 
-    let result = db
-        .query("CALL betweenness('E') YIELD node_id, score")
-        .unwrap();
+    let result = db.query("CALL betweenness('E') YIELD node_id, score").unwrap();
     assert_eq!(result.num_rows(), 4);
 
     // Collect scores by node_id
-    let mut scores: Vec<(i64, f64)> = result
-        .rows()
-        .iter()
-        .map(|r| (r.get_int(0).unwrap(), r.get_float(1).unwrap()))
-        .collect();
+    let mut scores: Vec<(i64, f64)> =
+        result.rows().iter().map(|r| (r.get_int(0).unwrap(), r.get_float(1).unwrap())).collect();
     scores.sort_by_key(|&(nid, _)| nid);
 
     // node 0 (A) and node 3 (D) are endpoints → score 0.0
@@ -73,33 +66,19 @@ fn betweenness_star() {
     create_edge(&db, 1, 3);
     create_edge(&db, 1, 4);
 
-    let result = db
-        .query("CALL betweenness('E') YIELD node_id, score")
-        .unwrap();
+    let result = db.query("CALL betweenness('E') YIELD node_id, score").unwrap();
     assert_eq!(result.num_rows(), 4);
 
-    let mut scores: Vec<(i64, f64)> = result
-        .rows()
-        .iter()
-        .map(|r| (r.get_int(0).unwrap(), r.get_float(1).unwrap()))
-        .collect();
+    let mut scores: Vec<(i64, f64)> =
+        result.rows().iter().map(|r| (r.get_int(0).unwrap(), r.get_float(1).unwrap())).collect();
     scores.sort_by_key(|&(nid, _)| nid);
 
     // Center (node_id 0, offset 0 for id=1) has highest BC
     // Leaves have 0 BC
     let center_score = scores[0].1; // node offset 0 = id 1 (center)
-    assert!(
-        (center_score - 3.0).abs() < 1e-9,
-        "center should be 3.0, got {}",
-        center_score
-    );
+    assert!((center_score - 3.0).abs() < 1e-9, "center should be 3.0, got {}", center_score);
     for &(nid, score) in &scores[1..] {
-        assert!(
-            score.abs() < 1e-9,
-            "leaf node {} should have score 0.0, got {}",
-            nid,
-            score
-        );
+        assert!(score.abs() < 1e-9, "leaf node {} should have score 0.0, got {}", nid, score);
     }
 }
 
@@ -115,9 +94,7 @@ fn betweenness_triangle() {
     create_edge(&db, 2, 3);
     create_edge(&db, 1, 3);
 
-    let result = db
-        .query("CALL betweenness('E') YIELD node_id, score")
-        .unwrap();
+    let result = db.query("CALL betweenness('E') YIELD node_id, score").unwrap();
     assert_eq!(result.num_rows(), 3);
 
     for row in result.rows() {
@@ -144,9 +121,7 @@ fn betweenness_isolated_node() {
     create_node(&db, 2);
     create_edge(&db, 1, 2);
 
-    let result = db
-        .query("CALL betweenness('E') YIELD node_id, score")
-        .unwrap();
+    let result = db.query("CALL betweenness('E') YIELD node_id, score").unwrap();
     assert_eq!(result.num_rows(), 2);
 
     // Two directly connected nodes — neither is an intermediary.

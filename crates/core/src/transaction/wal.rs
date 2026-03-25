@@ -114,12 +114,8 @@ pub struct WalWriter {
 impl WalWriter {
     /// Create a new WAL file, overwriting if it exists.
     pub fn create(path: &Path) -> Result<Self, GqliteError> {
-        let file = OpenOptions::new()
-            .create(true)
-            .truncate(true)
-            .write(true)
-            .read(true)
-            .open(path)?;
+        let file =
+            OpenOptions::new().create(true).truncate(true).write(true).read(true).open(path)?;
         let mut writer = BufWriter::new(file);
 
         // Write header
@@ -127,11 +123,7 @@ impl WalWriter {
         writer.write_all(&WAL_VERSION.to_le_bytes())?;
         writer.flush()?;
 
-        Ok(Self {
-            writer,
-            path: path.to_path_buf(),
-            record_count: 0,
-        })
+        Ok(Self { writer, path: path.to_path_buf(), record_count: 0 })
     }
 
     /// Open an existing WAL file for appending.
@@ -139,11 +131,7 @@ impl WalWriter {
         let file = OpenOptions::new().read(true).write(true).open(path)?;
         let mut writer = BufWriter::new(file);
         writer.seek(SeekFrom::End(0))?;
-        Ok(Self {
-            writer,
-            path: path.to_path_buf(),
-            record_count: 0,
-        })
+        Ok(Self { writer, path: path.to_path_buf(), record_count: 0 })
     }
 
     /// Append a record and fsync.
@@ -247,8 +235,8 @@ impl WalReader {
         loop {
             match self.read_one() {
                 Ok(Some(rec)) => records.push(rec),
-                Ok(None) => break,           // EOF
-                Err(_) => break,             // corrupted — stop reading
+                Ok(None) => break, // EOF
+                Err(_) => break,   // corrupted — stop reading
             }
         }
         Ok(records)
@@ -307,7 +295,7 @@ impl WalReader {
 
 // ── Recovery ─────────────────────────────────────────────────────
 
-use crate::catalog::{ColumnDef, Catalog};
+use crate::catalog::{Catalog, ColumnDef};
 use crate::storage::table::{NodeTable, RelTable};
 use crate::Storage;
 
@@ -379,11 +367,7 @@ fn replay_single_record(
     storage: &mut Storage,
 ) -> Result<(), GqliteError> {
     match &record.payload {
-        WalPayload::CreateNodeTable {
-            name,
-            columns,
-            primary_key,
-        } => {
+        WalPayload::CreateNodeTable { name, columns, primary_key } => {
             let col_defs: Vec<ColumnDef> = columns
                 .iter()
                 .enumerate()
@@ -399,12 +383,7 @@ fn replay_single_record(
             storage.node_tables.insert(table_id, NodeTable::new(&entry));
         }
 
-        WalPayload::CreateRelTable {
-            name,
-            from_table,
-            to_table,
-            columns,
-        } => {
+        WalPayload::CreateRelTable { name, from_table, to_table, columns } => {
             let col_defs: Vec<ColumnDef> = columns
                 .iter()
                 .enumerate()
@@ -415,8 +394,7 @@ fn replay_single_record(
                     nullable: true,
                 })
                 .collect();
-            let table_id =
-                catalog.create_rel_table(name, from_table, to_table, col_defs)?;
+            let table_id = catalog.create_rel_table(name, from_table, to_table, col_defs)?;
             let entry = catalog.get_rel_table(name).unwrap().clone();
             storage.rel_tables.insert(table_id, RelTable::new(&entry));
         }
@@ -433,52 +411,32 @@ fn replay_single_record(
             }
         }
 
-        WalPayload::InsertNode {
-            table_id, values, ..
-        } => {
+        WalPayload::InsertNode { table_id, values, .. } => {
             if let Some(nt) = storage.node_tables.get_mut(table_id) {
                 nt.insert(values, record.txn_id)?;
             }
         }
 
-        WalPayload::InsertRel {
-            rel_table_id,
-            src,
-            dst,
-            properties,
-            ..
-        } => {
+        WalPayload::InsertRel { rel_table_id, src, dst, properties, .. } => {
             if let Some(rt) = storage.rel_tables.get_mut(rel_table_id) {
                 rt.insert_rel(*src, *dst, properties)?;
                 rt.compact();
             }
         }
 
-        WalPayload::UpdateProperty {
-            table_id,
-            node_offset,
-            col_idx,
-            new_value,
-        } => {
+        WalPayload::UpdateProperty { table_id, node_offset, col_idx, new_value } => {
             if let Some(nt) = storage.node_tables.get_mut(table_id) {
-                nt.update(*node_offset, *col_idx, new_value.clone())?;
+                nt.update(*node_offset, *col_idx, new_value.clone(), record.txn_id)?;
             }
         }
 
-        WalPayload::DeleteNode {
-            table_id,
-            node_offset,
-        } => {
+        WalPayload::DeleteNode { table_id, node_offset } => {
             if let Some(nt) = storage.node_tables.get_mut(table_id) {
                 nt.delete(*node_offset, record.txn_id)?;
             }
         }
 
-        WalPayload::AlterTableAddColumn {
-            table_name,
-            col_name,
-            data_type,
-        } => {
+        WalPayload::AlterTableAddColumn { table_name, col_name, data_type } => {
             let col_id = catalog
                 .get_node_table(table_name)
                 .map(|e| e.columns.len() as u32)
@@ -502,10 +460,7 @@ fn replay_single_record(
             }
         }
 
-        WalPayload::AlterTableDropColumn {
-            table_name,
-            col_name,
-        } => {
+        WalPayload::AlterTableDropColumn { table_name, col_name } => {
             let is_node = catalog.get_node_table(table_name).is_some();
             if is_node {
                 let col_idx = catalog
@@ -526,18 +481,11 @@ fn replay_single_record(
             }
         }
 
-        WalPayload::AlterTableRenameTable {
-            old_name,
-            new_name,
-        } => {
+        WalPayload::AlterTableRenameTable { old_name, new_name } => {
             catalog.rename_table(old_name, new_name)?;
         }
 
-        WalPayload::AlterTableRenameColumn {
-            table_name,
-            old_col,
-            new_col,
-        } => {
+        WalPayload::AlterTableRenameColumn { table_name, old_col, new_col } => {
             let is_node = catalog.get_node_table(table_name).is_some();
             if is_node {
                 catalog.rename_column_in_node_table(table_name, old_col, new_col)?;
@@ -562,4 +510,3 @@ pub fn wal_path_for(db_path: &Path) -> PathBuf {
 }
 
 // ── Tests ────────────────────────────────────────────────────────
-
